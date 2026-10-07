@@ -1,0 +1,6 @@
+{
+  "name": "Pilote 1",
+  "description": "Assistant intelligent personnel : localisation, restaurants, emails et gestion de projets avec Pilote 1.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
