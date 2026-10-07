@@ -14,7 +14,13 @@ import {
 } from 'lucide-react';
 import { Message, Attachment, UserLocation, Restaurant, EmailAction, AppointmentAction } from '../types';
 import { RestaurantMapCard } from './RestaurantMapCard';
-import { EmailActionCard, AppointmentActionCard } from './ActionCards';
+import { 
+  EmailActionCard, 
+  AppointmentActionCard, 
+  GoogleTaskActionCard, 
+  GoogleDriveActionCard, 
+  ScheduledTaskActionCard 
+} from './ActionCards';
 import { MarkdownRenderer } from './MarkdownRenderer';
 
 interface ChatViewProps {
@@ -25,6 +31,7 @@ interface ChatViewProps {
   onRequestLocation: () => void;
   onScheduleAppointment: (action: AppointmentAction) => void;
   onSendEmailAction: (action: EmailAction) => void;
+  onOpenTasksModal?: () => void;
 }
 
 const SUGGESTED_PROMPTS = [
@@ -64,6 +71,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onRequestLocation,
   onScheduleAppointment,
   onSendEmailAction,
+  onOpenTasksModal,
 }) => {
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -296,6 +304,28 @@ export const ChatView: React.FC<ChatViewProps> = ({
                       <AppointmentActionCard
                         action={message.appointmentAction}
                         onConfirmSuccess={(action) => onScheduleAppointment(action)}
+                      />
+                    )}
+
+                    {/* Integrated Google Tasks Action Card */}
+                    {message.taskAction && (
+                      <GoogleTaskActionCard
+                        action={message.taskAction}
+                      />
+                    )}
+
+                    {/* Integrated Google Drive Action Card */}
+                    {message.driveAction && (
+                      <GoogleDriveActionCard
+                        action={message.driveAction}
+                      />
+                    )}
+
+                    {/* Integrated Scheduled Task Action Card */}
+                    {message.scheduledTaskAction && (
+                      <ScheduledTaskActionCard
+                        action={message.scheduledTaskAction}
+                        onOpenTasksModal={onOpenTasksModal}
                       />
                     )}
                   </div>

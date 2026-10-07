@@ -1,4 +1,43 @@
-import { Conversation, MemoryItem, UserProfileData, Message } from '../types';
+import { Conversation, MemoryItem, UserProfileData, Message, ScheduledTask, ScheduledTaskExecution } from '../types';
+
+const DEFAULT_SCHEDULED_TASKS: ScheduledTask[] = [
+  {
+    id: 'task-daily-briefing',
+    instruction: "Prépare le récapitulatif de ma journée, mes e-mails importants et vérifie mes priorités sur Google Tasks.",
+    frequency: 'morning',
+    timeOfDay: '08:30',
+    targetWorkspace: 'tasks',
+    enabled: true,
+    createdAt: Date.now() - 86400000,
+    lastRunAt: Date.now() - 3600000 * 2,
+    executionHistory: [
+      {
+        id: 'exec-1',
+        timestamp: Date.now() - 3600000 * 2,
+        status: 'success',
+        resultSummary: 'Briefing matinal généré : 3 tâches prioritaires synchronisées avec Google Tasks.',
+      },
+    ],
+  },
+  {
+    id: 'task-daily-restaurants',
+    instruction: "Repère les meilleures adresses de restaurants pour le déjeuner dans ma ville active avec la carte Google Maps.",
+    frequency: 'daily',
+    timeOfDay: '11:45',
+    targetWorkspace: 'auto',
+    enabled: true,
+    createdAt: Date.now() - 86400000,
+    lastRunAt: Date.now() - 3600000 * 24,
+    executionHistory: [
+      {
+        id: 'exec-2',
+        timestamp: Date.now() - 3600000 * 24,
+        status: 'success',
+        resultSummary: 'Carte interactive actualisée avec 3 tables recommandées à proximité.',
+      },
+    ],
+  },
+];
 
 const DEFAULT_MEMORIES: MemoryItem[] = [
   {
@@ -49,13 +88,14 @@ export const loadProfileData = (userId?: string | null): UserProfileData => {
     messages: [],
   };
 
-  const initialProfile: UserProfileData = {
+    const initialProfile: UserProfileData = {
     userId: userId || 'guest',
     email: null,
     displayName: null,
     memories: DEFAULT_MEMORIES,
     conversations: [initialConv],
     activeConversationId: initialConvId,
+    scheduledTasks: DEFAULT_SCHEDULED_TASKS,
   };
 
   saveProfileData(initialProfile);
@@ -191,4 +231,101 @@ export const buildMemoryContextPrompt = (profile: UserProfileData): string => {
 Tu disposes d'une mémoire continue des préférences et habitudes de cet utilisateur pour personnaliser chaque réponse :
 ${memoryLines.join('\n')}
 Prends en compte ce contexte naturellement sans réciter mécaniquement la liste. Si l'utilisateur mentionne de nouvelles préférences, adapte-toi instantanément.`;
+};
+
+/**
+ * Scheduled Tasks Operations
+ */
+export const getScheduledTasks = (profile: UserProfileData): ScheduledTask[] => {
+  return profile.scheduledTasks || DEFAULT_SCHEDULED_TASKS;
+};
+
+export const addScheduledTask = (
+  profile: UserProfileData,
+  taskData: Omit<ScheduledTask, 'id' | 'createdAt' | 'executionHistory'>
+): { profile: UserProfileData; newTask: ScheduledTask } => {
+  const newTask: ScheduledTask = {
+    ...taskData,
+    id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    createdAt: Date.now(),
+    executionHistory: [],
+  };
+
+  const currentTasks = profile.scheduledTasks || DEFAULT_SCHEDULED_TASKS;
+  const updatedTasks = [newTask, ...currentTasks];
+
+  const updated: UserProfileData = {
+    ...profile,
+    scheduledTasks: updatedTasks,
+  };
+
+  saveProfileData(updated);
+  return { profile: updated, newTask };
+};
+
+export const toggleScheduledTask = (
+  profile: UserProfileData,
+  taskId: string
+): UserProfileData => {
+  const currentTasks = profile.scheduledTasks || DEFAULT_SCHEDULED_TASKS;
+  const updatedTasks = currentTasks.map((t) =>
+    t.id === taskId ? { ...t, enabled: !t.enabled } : t
+  );
+
+  const updated: UserProfileData = {
+    ...profile,
+    scheduledTasks: updatedTasks,
+  };
+
+  saveProfileData(updated);
+  return updated;
+};
+
+export const deleteScheduledTask = (
+  profile: UserProfileData,
+  taskId: string
+): UserProfileData => {
+  const currentTasks = profile.scheduledTasks || DEFAULT_SCHEDULED_TASKS;
+  const updatedTasks = currentTasks.filter((t) => t.id !== taskId);
+
+  const updated: UserProfileData = {
+    ...profile,
+    scheduledTasks: updatedTasks,
+  };
+
+  saveProfileData(updated);
+  return updated;
+};
+
+export const recordScheduledTaskExecution = (
+  profile: UserProfileData,
+  taskId: string,
+  resultSummary: string,
+  status: 'success' | 'failed' = 'success'
+): UserProfileData => {
+  const execution: ScheduledTaskExecution = {
+    id: `exec-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+    timestamp: Date.now(),
+    status,
+    resultSummary,
+  };
+
+  const currentTasks = profile.scheduledTasks || DEFAULT_SCHEDULED_TASKS;
+  const updatedTasks = currentTasks.map((t) =>
+    t.id === taskId
+      ? {
+          ...t,
+          lastRunAt: Date.now(),
+          executionHistory: [execution, ...t.executionHistory.slice(0, 19)],
+        }
+      : t
+  );
+
+  const updated: UserProfileData = {
+    ...profile,
+    scheduledTasks: updatedTasks,
+  };
+
+  saveProfileData(updated);
+  return updated;
 };

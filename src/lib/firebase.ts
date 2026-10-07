@@ -13,10 +13,13 @@ import firebaseConfig from '../../firebase-applet-config.json';
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
 export const auth = getAuth(app);
 
-// Configure Google Auth Provider with Workspace Scopes
+// Configure Google Auth Provider with full Workspace Scopes
 const googleProvider = new GoogleAuthProvider();
 googleProvider.addScope('https://www.googleapis.com/auth/calendar.events');
 googleProvider.addScope('https://www.googleapis.com/auth/gmail.send');
+googleProvider.addScope('https://www.googleapis.com/auth/gmail.modify');
+googleProvider.addScope('https://www.googleapis.com/auth/tasks');
+googleProvider.addScope('https://www.googleapis.com/auth/drive.file');
 googleProvider.setCustomParameters({
   prompt: 'select_account',
 });
@@ -187,4 +190,167 @@ export const scheduleRealCalendarEvent = async (params: {
   }
 
   return await response.json();
+};
+
+/**
+ * Create a new task in Google Tasks API
+ */
+export const createRealGoogleTask = async (params: {
+  title: string;
+  notes?: string;
+  dueDate?: string;
+}): Promise<any> => {
+  if (!cachedAccessToken) {
+    throw new Error('Non connecté à Google. Connexion requise pour synchroniser avec Google Tasks.');
+  }
+
+  const payload: any = {
+    title: params.title,
+    notes: params.notes || 'Créé automatiquement par Pilote 1',
+  };
+
+  if (params.dueDate) {
+    // RFC 3339 timestamp
+    const d = new Date(params.dueDate);
+    if (!isNaN(d.getTime())) {
+      payload.due = d.toISOString();
+    }
+  }
+
+  const response = await fetch('https://tasks.googleapis.com/tasks/v1/lists/@default/tasks', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${cachedAccessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(errorData.error?.message || 'Échec de la création dans Google Tasks');
+  }
+
+  return await response.json();
+};
+
+/**
+ * List active tasks from Google Tasks API
+ */
+export const listRealGoogleTasks = async (): Promise<any[]> => {
+  if (!cachedAccessToken) return [];
+  try {
+    const response = await fetch('https://tasks.googleapis.com/tasks/v1/lists/@default/tasks?showCompleted=false&maxResults=10', {
+      headers: {
+        'Authorization': `Bearer ${cachedAccessToken}`,
+      },
+    });
+    if (!response.ok) return [];
+    const data = await response.json();
+    return data.items || [];
+  } catch (err) {
+    console.warn('Google Tasks list error:', err);
+    return [];
+  }
+};
+
+/**
+ * Create a new file or doc in Google Drive API
+ */
+export const createRealGoogleDriveFile = async (params: {
+  title: string;
+  content: string;
+  mimeType?: string;
+}): Promise<{ id: string; name: string; webViewLink?: string }> => {
+  if (!cachedAccessToken) {
+    throw new Error('Non connecté à Google. Connexion requise pour enregistrer dans Google Drive.');
+  }
+
+  const fileTitle = params.title.endsWith('.txt') || params.title.endsWith('.md') 
+    ? params.title 
+    : `${params.title}.md`;
+
+  const metadata = {
+    name: fileTitle,
+    mimeType: params.mimeType || 'text/markdown',
+    description: 'Document généré automatiquement par Pilote 1',
+  };
+
+  const boundary = '-------314159265358979323846';
+  const delimiter = `\r\n--${boundary}\r\n`;
+  const closeDelimiter = `\r\n--${boundary}--`;
+
+  const multipartRequestBody =
+    delimiter +
+    'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+    JSON.stringify(metadata) +
+    delimiter +
+    'Content-Type: text/plain; charset=UTF-8\r\n\r\n' +
+    params.content +
+    closeDelimiter;
+
+  const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${cachedAccessToken}`,
+      'Content-Type': `multipart/related; boundary=${boundary}`,
+    },
+    body: multipartRequestBody,
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(errorData.error?.message || 'Échec de la création dans Google Drive');
+  }
+
+  const data = await response.json();
+  return {
+    id: data.id,
+    name: data.name,
+    webViewLink: data.webViewLink || `https://drive.google.com/file/d/${data.id}/view`,
+  };
+};
+
+/**
+ * List recent events from Google Calendar API
+ */
+export const listRealCalendarEvents = async (maxResults = 5): Promise<any[]> => {
+  if (!cachedAccessToken) return [];
+  try {
+    const nowIso = new Date().toISOString();
+    const response = await fetch(
+      `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${encodeURIComponent(nowIso)}&maxResults=${maxResults}&singleEvents=true&orderBy=startTime`,
+      {
+        headers: {
+          'Authorization': `Bearer ${cachedAccessToken}`,
+        },
+      }
+    );
+    if (!response.ok) return [];
+    const data = await response.json();
+    return data.items || [];
+  } catch (err) {
+    console.warn('Calendar list error:', err);
+    return [];
+  }
+};
+
+/**
+ * List recent emails from Gmail API
+ */
+export const listRealGmailMessages = async (maxResults = 5): Promise<any[]> => {
+  if (!cachedAccessToken) return [];
+  try {
+    const response = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=${maxResults}`, {
+      headers: {
+        'Authorization': `Bearer ${cachedAccessToken}`,
+      },
+    });
+    if (!response.ok) return [];
+    const data = await response.json();
+    return data.messages || [];
+  } catch (err) {
+    console.warn('Gmail messages list error:', err);
+    return [];
+  }
 };

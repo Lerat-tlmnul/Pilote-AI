@@ -5,6 +5,8 @@ import { ProjectsView } from './components/ProjectsView';
 import { ProSubscriptionModal } from './components/ProSubscriptionModal';
 import { ConversationDrawer } from './components/ConversationDrawer';
 import { MemoryModal } from './components/MemoryModal';
+import { ImportantWelcomeModal } from './components/ImportantWelcomeModal';
+import { ScheduledTasksModal } from './components/ScheduledTasksModal';
 import { 
   Message, 
   Attachment, 
@@ -12,6 +14,10 @@ import {
   Restaurant, 
   EmailAction, 
   AppointmentAction,
+  GoogleTaskAction,
+  GoogleDriveAction,
+  ScheduledTaskAction,
+  ScheduledTask,
   GoogleUser,
   UserProfileData,
   MemoryItem
@@ -20,6 +26,10 @@ import {
   initAuthListener, 
   signInWithGoogle, 
   signOutGoogle, 
+  createRealGoogleTask,
+  createRealGoogleDriveFile,
+  sendRealGmail,
+  scheduleRealCalendarEvent
 } from './lib/firebase';
 import {
   loadProfileData,
@@ -29,7 +39,9 @@ import {
   renameConversation,
   addMemoryItem,
   removeMemoryItem,
-  buildMemoryContextPrompt
+  buildMemoryContextPrompt,
+  addScheduledTask,
+  recordScheduledTaskExecution
 } from './lib/memoryStorage';
 import { extractSpecificEmailRequest, sanitizeEmailAction } from './lib/emailExtractor';
 import { getRestaurantsForCity, detectCityInText } from './lib/cityRestaurants';
@@ -46,12 +58,28 @@ export default function App() {
   const [isProModalOpen, setIsProModalOpen] = useState(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isMemoryModalOpen, setIsMemoryModalOpen] = useState(false);
+  const [isImportantModalOpen, setIsImportantModalOpen] = useState(false);
+  const [isTasksModalOpen, setIsTasksModalOpen] = useState(false);
 
   const [googleUser, setGoogleUser] = useState<GoogleUser | null>(null);
   const [isConnectingGoogle, setIsConnectingGoogle] = useState(false);
+  const [isExecutingScheduledTask, setIsExecutingScheduledTask] = useState(false);
 
-  // Persistent User Profile State (Conversations + Memory)
+  // Persistent User Profile State (Conversations + Memory + Scheduled Tasks)
   const [profile, setProfile] = useState<UserProfileData>(() => loadProfileData('guest'));
+
+  // Show important welcome modal on first app load
+  useEffect(() => {
+    try {
+      const seen = localStorage.getItem('pilote_welcome_seen_v2');
+      if (!seen) {
+        setIsImportantModalOpen(true);
+        localStorage.setItem('pilote_welcome_seen_v2', 'true');
+      }
+    } catch {
+      // ignore localStorage errors
+    }
+  }, []);
 
   const [userLocation, setUserLocation] = useState<UserLocation | null>({
     latitude: 48.8566,
@@ -246,6 +274,9 @@ export default function App() {
     let restaurants: Restaurant[] | undefined;
     let emailAction: EmailAction | undefined;
     let appointmentAction: AppointmentAction | undefined;
+    let taskAction: GoogleTaskAction | undefined;
+    let driveAction: GoogleDriveAction | undefined;
+    let scheduledTaskAction: ScheduledTaskAction | undefined;
 
     const userPromptLower = userPrompt.toLowerCase();
     const explicitEmailMatch = userPrompt.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
@@ -304,6 +335,52 @@ export default function App() {
       }
     }
 
+    // Check for ```json:task_action ... ```
+    const taskMatch = rawText.match(/```json:task_action\s*([\s\S]*?)\s*```/);
+    if (taskMatch) {
+      try {
+        taskAction = JSON.parse(taskMatch[1]);
+        cleanText = cleanText.replace(taskMatch[0], '').trim();
+      } catch (err) {
+        console.warn('Failed to parse task JSON', err);
+      }
+    }
+
+    // Check for ```json:drive_action ... ```
+    const driveMatch = rawText.match(/```json:drive_action\s*([\s\S]*?)\s*```/);
+    if (driveMatch) {
+      try {
+        driveAction = JSON.parse(driveMatch[1]);
+        cleanText = cleanText.replace(driveMatch[0], '').trim();
+      } catch (err) {
+        console.warn('Failed to parse drive JSON', err);
+      }
+    }
+
+    // Check for ```json:scheduled_task_action ... ```
+    const scheduledMatch = rawText.match(/```json:scheduled_task_action\s*([\s\S]*?)\s*```/);
+    if (scheduledMatch) {
+      try {
+        scheduledTaskAction = JSON.parse(scheduledMatch[1]);
+        cleanText = cleanText.replace(scheduledMatch[0], '').trim();
+        if (scheduledTaskAction) {
+          // Auto add to user profile scheduled tasks
+          setProfile((prev) => {
+            const { profile: updated } = addScheduledTask(prev, {
+              instruction: scheduledTaskAction!.instruction,
+              frequency: scheduledTaskAction!.frequency,
+              timeOfDay: scheduledTaskAction!.timeOfDay || '08:30',
+              targetWorkspace: scheduledTaskAction!.targetWorkspace || 'auto',
+              enabled: true,
+            });
+            return updated;
+          });
+        }
+      } catch (err) {
+        console.warn('Failed to parse scheduled task JSON', err);
+      }
+    }
+
     // Restaurants fallback for city if requested but missing
     if (!restaurants && (userPromptLower.includes('resto') || userPromptLower.includes('restaurant') || userPromptLower.includes('manger') || userPromptLower.includes('dîner'))) {
       const detected = detectCityInText(userPrompt);
@@ -311,7 +388,7 @@ export default function App() {
       restaurants = cityData.restaurants;
     }
 
-    return { cleanText, restaurants, emailAction, appointmentAction };
+    return { cleanText, restaurants, emailAction, appointmentAction, taskAction, driveAction, scheduledTaskAction };
   };
 
   // Direct client-side inference fallback (for static Vercel hosting)
@@ -322,21 +399,20 @@ export default function App() {
     const activeCity = detectedCity ? detectedCity.name : (userLocation?.city || 'Paris');
 
     const systemPrompt = `Tu es Pilote 1, un assistant personnel d'élite doté d'une interface ultra-élégante et intuitive.
-Tu as accès à la géolocalisation de l'utilisateur (Ville active : ${activeCity}), tu trouves des restaurants d'exception avec leur carte interactive en direct, tu rédiges et envoies des e-mails et tu organises les rendez-vous et agendas.
+Tu as accès à l'ensemble de Google Workspace (Gmail, Google Calendar, Google Tasks, Google Drive) ainsi qu'à la géolocalisation de l'utilisateur (Ville active : ${activeCity}) et à l'API Google Maps officielle.
+Tu exécutes directement les requêtes de l'utilisateur : TU DIS DE FAIRE ET IL FAIT. Ne pose pas de questions inutiles, rédige et exécute immédiatement.
 
 RÈGLE ABSOLUE D'IDENTITÉ : Tu es UNIQUEMENT et TOUJOURS "Pilote 1". Tu ne dois JAMAIS citer ni divulguer le nom d'un modèle d'IA sous-jacent.
 
-RÈGLE N°1 CRITIQUE (EMAILS) :
-- Si l'utilisateur a donné une adresse email (@), TU DOIS UTILISER CETTE ADRESSE EXACTE comme "recipient" !
-- Si l'utilisateur a donné un message précis, TU DOIS REPRENDRE STRICTEMENT CE MESSAGE EXACT dans "body" !
-- Ne jamais inventer d'adresse comme partenaire.com !
-Ajoute le bloc json:email_action si un email est demandé.
+FORMATS STRUCTURÉS D'ACTION :
+1. Restaurants : bloc \`\`\`json:restaurants ... \`\`\`
+2. Envoi d'e-mail : bloc \`\`\`json:email_action ... \`\`\` (respecte strictement l'email fourni)
+3. Rendez-vous Calendar : bloc \`\`\`json:appointment_action ... \`\`\`
+4. Google Tasks : bloc \`\`\`json:task_action ... \`\`\`
+5. Google Drive : bloc \`\`\`json:drive_action ... \`\`\`
+6. Tâche récurrente / quotidienne : bloc \`\`\`json:scheduled_task_action ... \`\`\`
 
-RÈGLE N°2 CRITIQUE (RESTAURANTS) :
-- Propose des restaurants STRICTEMENT situés à ${activeCity} avec leurs vraies coordonnées GPS (lat, lng) pour afficher la carte interactive en direct.
-Ajoute le bloc json:restaurants si des restaurants sont demandés.
-
-${googleUser ? `[L'utilisateur est connecté avec son compte Google : ${googleUser.email}. Propose-lui d'expédier ses e-mails via Gmail et d'ajouter ses créneaux sur son Google Calendar.]` : ''}
+${googleUser ? `[L'utilisateur est connecté avec son compte Google : ${googleUser.email}. Toutes les actions Google Workspace sont synchronisées en direct.]` : ''}
 ${memoryContext}`;
 
     const controller = new AbortController();
@@ -438,7 +514,7 @@ ${memoryContext}`;
         rawContent = await callDirectNvidiaFallback(newMessages);
       }
 
-      const { cleanText, restaurants, emailAction, appointmentAction } = parseAIContent(rawContent, text);
+      const { cleanText, restaurants, emailAction, appointmentAction, taskAction, driveAction, scheduledTaskAction } = parseAIContent(rawContent, text);
 
       const assistantMessage: Message = {
         id: `msg-${Date.now()}-ai`,
@@ -448,6 +524,9 @@ ${memoryContext}`;
         restaurants,
         emailAction,
         appointmentAction,
+        taskAction,
+        driveAction,
+        scheduledTaskAction,
       };
 
       // Persist assistant message in active conversation
@@ -466,7 +545,7 @@ ${memoryContext}`;
       const fallbackMsg: Message = {
         id: `msg-${Date.now()}-ai-fallback`,
         role: 'assistant',
-        content: "Je suis à votre entière disposition pour vos restaurants avec carte interactive, l'envoi d'e-mails via Gmail, la gestion d'agenda et la planification de vos grands projets.",
+        content: "Je suis à votre entière disposition pour vos restaurants avec carte interactive, l'envoi d'e-mails via Gmail, la gestion d'agenda, vos tâches Google Workspace et la planification de vos grands projets.",
         timestamp: Date.now(),
       };
 
@@ -482,6 +561,24 @@ ${memoryContext}`;
       });
     } finally {
       setIsThinking(false);
+    }
+  };
+
+  // Immediate execution of a scheduled task on-demand
+  const handleExecuteScheduledTaskNow = async (task: ScheduledTask) => {
+    setIsExecutingScheduledTask(true);
+    try {
+      // Execute the task instruction directly in the chat
+      await handleSendMessage(task.instruction, []);
+      // Record execution in task history
+      const updated = recordScheduledTaskExecution(profile, task.id, `Exécutée avec succès : "${task.instruction.slice(0, 45)}..."`, 'success');
+      setProfile(updated);
+    } catch (err) {
+      console.error('Erreur exécution tâche:', err);
+      const updated = recordScheduledTaskExecution(profile, task.id, 'Erreur lors de l\'exécution.', 'failed');
+      setProfile(updated);
+    } finally {
+      setIsExecutingScheduledTask(false);
     }
   };
 
@@ -516,6 +613,9 @@ ${memoryContext}`;
         onCreateNewChat={handleCreateNewChat}
         conversationsCount={profile.conversations.length}
         onOpenMemoryModal={() => setIsMemoryModalOpen(true)}
+        onOpenImportantModal={() => setIsImportantModalOpen(true)}
+        onOpenTasksModal={() => setIsTasksModalOpen(true)}
+        scheduledTasksCount={profile.scheduledTasks?.length || 0}
       />
 
       {/* Main View Area */}
@@ -527,6 +627,7 @@ ${memoryContext}`;
             onSendMessage={handleSendMessage}
             userLocation={userLocation}
             onRequestLocation={requestLocation}
+            onOpenTasksModal={() => setIsTasksModalOpen(true)}
             onScheduleAppointment={(action) => {
               const confirmationMsg: Message = {
                 id: `msg-${Date.now()}-confirm`,
@@ -570,6 +671,28 @@ ${memoryContext}`;
           </div>
         )}
       </main>
+
+      {/* Important Welcome & Features Guide Modal */}
+      <ImportantWelcomeModal
+        isOpen={isImportantModalOpen}
+        onClose={() => setIsImportantModalOpen(false)}
+        onOpenTasksModal={() => {
+          setIsImportantModalOpen(false);
+          setIsTasksModalOpen(true);
+        }}
+        isGoogleConnected={!!googleUser}
+        onSignInGoogle={handleSignInGoogle}
+      />
+
+      {/* Daily & Recurring Scheduled Tasks Manager Modal */}
+      <ScheduledTasksModal
+        isOpen={isTasksModalOpen}
+        onClose={() => setIsTasksModalOpen(false)}
+        profile={profile}
+        onUpdateProfile={(updated) => setProfile(updated)}
+        onExecuteTaskNow={handleExecuteScheduledTaskNow}
+        isExecutingTask={isExecutingScheduledTask}
+      />
 
       {/* PRO Subscription Modal */}
       <ProSubscriptionModal

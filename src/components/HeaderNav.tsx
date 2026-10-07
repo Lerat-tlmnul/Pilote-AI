@@ -6,11 +6,13 @@ import {
   Sparkles, 
   Navigation, 
   LogOut, 
-  CheckCircle2,
-  ChevronDown,
-  History,
-  Plus,
-  Brain
+  CheckCircle2, 
+  ChevronDown, 
+  History, 
+  Plus, 
+  Brain,
+  Repeat,
+  Info
 } from 'lucide-react';
 import { UserLocation, GoogleUser } from '../types';
 
@@ -28,6 +30,9 @@ interface HeaderNavProps {
   onCreateNewChat: () => void;
   conversationsCount: number;
   onOpenMemoryModal: () => void;
+  onOpenImportantModal: () => void;
+  onOpenTasksModal: () => void;
+  scheduledTasksCount?: number;
 }
 
 const LOGO_URL = "https://cdn.fbsbx.com/v/t65.102178-21/841369064_1700174318342564_3271721217476734999_n.jpg/pilote_4k_transparent.png?_nc_ht=cdn.fbsbx.com&_nc_ohc=odcyhxgaYC8Q7kNvwF6bcWV&sdl=0&ccb=14-4&oh=00_AQPGkUgJrahia3JJDnDRKdVEg8rkTFmoALNTHwdL52ZTrg&oe=6AEDA667&_nc_sid=4ee932";
@@ -46,6 +51,9 @@ export const HeaderNav: React.FC<HeaderNavProps> = ({
   onCreateNewChat,
   conversationsCount,
   onOpenMemoryModal,
+  onOpenImportantModal,
+  onOpenTasksModal,
+  scheduledTasksCount = 0,
 }) => {
   const [logoError, setLogoError] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
@@ -113,6 +121,35 @@ export const HeaderNav: React.FC<HeaderNavProps> = ({
             >
               <Plus className="w-3.5 h-3.5 text-slate-700" />
               <span>Nouveau</span>
+            </motion.button>
+
+            {/* Important Announcement Button */}
+            <motion.button
+              whileTap={{ scale: 0.94 }}
+              type="button"
+              onClick={onOpenImportantModal}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 hover:bg-amber-500/20 text-amber-900 border border-amber-500/25 text-xs font-bold transition-all cursor-pointer shadow-2xs"
+              title="Message Important : Guide et Fonctionnalités"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+              <span className="hidden md:inline">Message Important</span>
+            </motion.button>
+
+            {/* Scheduled Tasks Manager Button */}
+            <motion.button
+              whileTap={{ scale: 0.94 }}
+              type="button"
+              onClick={onOpenTasksModal}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-purple-500/10 hover:bg-purple-500/20 text-purple-900 border border-purple-500/25 text-xs font-bold transition-all cursor-pointer shadow-2xs"
+              title="Tâches & Automatisations Quotidiennes"
+            >
+              <Repeat className="w-3.5 h-3.5 text-purple-600" />
+              <span className="hidden md:inline">Tâches</span>
+              {scheduledTasksCount > 0 && (
+                <span className="w-4 h-4 rounded-full bg-purple-600 text-white text-[10px] flex items-center justify-center font-bold">
+                  {scheduledTasksCount}
+                </span>
+              )}
             </motion.button>
           </div>
 
@@ -223,7 +260,7 @@ export const HeaderNav: React.FC<HeaderNavProps> = ({
                       <div className="py-2 space-y-1.5 text-slate-700">
                         <div className="flex items-center gap-2 text-[11px] text-emerald-700 bg-emerald-50 px-2 py-1 rounded-lg">
                           <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                          <span>Profil & discussions synchronisés</span>
+                          <span>Google Workspace Connecté</span>
                         </div>
                       </div>
 
@@ -294,6 +331,31 @@ export const HeaderNav: React.FC<HeaderNavProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5">
+          {/* Important Message on Mobile */}
+          <button
+            type="button"
+            onClick={onOpenImportantModal}
+            className="p-1.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200"
+            title="Message Important"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+          </button>
+
+          {/* Scheduled Tasks on Mobile */}
+          <button
+            type="button"
+            onClick={onOpenTasksModal}
+            className="p-1.5 rounded-full bg-purple-50 text-purple-800 border border-purple-200 relative"
+            title="Tâches Quotidiennes"
+          >
+            <Repeat className="w-3.5 h-3.5 text-purple-600" />
+            {scheduledTasksCount > 0 && (
+              <span className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-purple-600 text-white text-[9px] flex items-center justify-center font-bold">
+                {scheduledTasksCount}
+              </span>
+            )}
+          </button>
+
           {/* Quick New Chat Button on Mobile */}
           <button
             type="button"

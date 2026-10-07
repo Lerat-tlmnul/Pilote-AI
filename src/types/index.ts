@@ -42,6 +42,53 @@ export interface AppointmentAction {
   status?: 'scheduled';
 }
 
+export interface GoogleTaskAction {
+  id?: string;
+  title: string;
+  notes?: string;
+  dueDate?: string;
+  status: 'created' | 'completed';
+  autoCreated?: boolean;
+}
+
+export interface GoogleDriveAction {
+  id?: string;
+  title: string;
+  content: string;
+  mimeType?: string;
+  fileUrl?: string;
+  autoCreated?: boolean;
+}
+
+export interface ScheduledTaskExecution {
+  id: string;
+  timestamp: number;
+  status: 'success' | 'failed';
+  resultSummary: string;
+}
+
+export interface ScheduledTask {
+  id: string;
+  instruction: string;
+  frequency: 'daily' | 'morning' | 'evening' | 'hourly' | 'weekly' | 'custom';
+  timeOfDay?: string; // e.g. "08:30" or "18:00"
+  targetWorkspace: 'auto' | 'gmail' | 'calendar' | 'tasks' | 'drive';
+  enabled: boolean;
+  createdAt: number;
+  lastRunAt?: number;
+  nextRunAt?: number;
+  executionHistory: ScheduledTaskExecution[];
+}
+
+export interface ScheduledTaskAction {
+  id?: string;
+  instruction: string;
+  frequency: ScheduledTask['frequency'];
+  timeOfDay?: string;
+  targetWorkspace?: ScheduledTask['targetWorkspace'];
+  status: 'created';
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -51,6 +98,9 @@ export interface Message {
   restaurants?: Restaurant[];
   emailAction?: EmailAction;
   appointmentAction?: AppointmentAction;
+  taskAction?: GoogleTaskAction;
+  driveAction?: GoogleDriveAction;
+  scheduledTaskAction?: ScheduledTaskAction;
 }
 
 export interface Milestone {
@@ -111,4 +161,5 @@ export interface UserProfileData {
   memories: MemoryItem[];
   conversations: Conversation[];
   activeConversationId: string;
+  scheduledTasks?: ScheduledTask[];
 }
