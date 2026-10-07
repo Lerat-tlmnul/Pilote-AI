@@ -7,11 +7,20 @@ import {
   onAuthStateChanged, 
   User 
 } from 'firebase/auth';
+import {
+  getFirestore,
+  doc,
+  setDoc,
+  getDoc,
+  collection,
+  onSnapshot
+} from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
-// Initialize Firebase App
+// Initialize Firebase App & Services
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
 export const auth = getAuth(app);
+export const db = getFirestore(app);
 
 // Configure Google Auth Provider with full Workspace Scopes
 const googleProvider = new GoogleAuthProvider();
@@ -354,3 +363,37 @@ export const listRealGmailMessages = async (maxResults = 5): Promise<any[]> => {
     return [];
   }
 };
+
+/**
+ * Persist user profile, conversations, and scheduled tasks to Firebase Firestore
+ */
+export const syncProfileToFirestore = async (userId: string, profileData: any): Promise<void> => {
+  if (!userId || userId === 'guest') return;
+  try {
+    const userDocRef = doc(db, 'users', userId);
+    await setDoc(userDocRef, {
+      ...profileData,
+      updatedAt: Date.now(),
+    }, { merge: true });
+  } catch (err) {
+    console.warn('Firestore sync warning (offline fallback active):', err);
+  }
+};
+
+/**
+ * Load user profile from Firebase Firestore with offline fallback
+ */
+export const fetchProfileFromFirestore = async (userId: string): Promise<any | null> => {
+  if (!userId || userId === 'guest') return null;
+  try {
+    const userDocRef = doc(db, 'users', userId);
+    const snap = await getDoc(userDocRef);
+    if (snap.exists()) {
+      return snap.data();
+    }
+  } catch (err) {
+    console.warn('Firestore load warning:', err);
+  }
+  return null;
+};
+

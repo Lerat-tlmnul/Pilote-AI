@@ -29,7 +29,9 @@ import {
   createRealGoogleTask,
   createRealGoogleDriveFile,
   sendRealGmail,
-  scheduleRealCalendarEvent
+  scheduleRealCalendarEvent,
+  syncProfileToFirestore,
+  fetchProfileFromFirestore
 } from './lib/firebase';
 import {
   loadProfileData,
@@ -43,14 +45,9 @@ import {
   addScheduledTask,
   recordScheduledTaskExecution
 } from './lib/memoryStorage';
-import { extractSpecificEmailRequest, sanitizeEmailAction } from './lib/emailExtractor';
-import { getRestaurantsForCity, detectCityInText } from './lib/cityRestaurants';
+import { sendChatMessage } from './lib/aiService';
 
 const BG_IMAGE_URL = "https://flow-content.google/image/e1cf28f0-1737-42fd-ad3a-f19ee5aacd13?Expires=1791409717&KeyName=labs-flow-prod-cdn-key&Signature=TkQoyce8x-Zk5uIvR-N2774-gEo";
-
-const NVIDIA_API_KEY = "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";
-const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
-const MODEL_NAME = "deepseek-ai/deepseek-v4.1-flash";
 
 export default function App() {
   const [currentTab, setCurrentTab] = useState<'chat' | 'projects'>('chat');
@@ -97,7 +94,7 @@ export default function App() {
 
   // Listen to Firebase Auth state
   useEffect(() => {
-    const unsubscribe = initAuthListener((user, _token) => {
+    const unsubscribe = initAuthListener(async (user, _token) => {
       if (user) {
         const gUser: GoogleUser = {
           uid: user.uid,
@@ -107,11 +104,23 @@ export default function App() {
         };
         setGoogleUser(gUser);
 
-        // Load or create profile tied to this user UID
-        const userProfile = loadProfileData(user.uid);
-        userProfile.email = user.email;
-        userProfile.displayName = user.displayName;
+        // Load profile from Firestore or local storage
+        let userProfile = loadProfileData(user.uid);
+        const remoteProfile = await fetchProfileFromFirestore(user.uid);
+        if (remoteProfile) {
+          userProfile = {
+            ...userProfile,
+            ...remoteProfile,
+            email: user.email,
+            displayName: user.displayName,
+          };
+        } else {
+          userProfile.email = user.email;
+          userProfile.displayName = user.displayName;
+        }
+
         saveProfileData(userProfile);
+        syncProfileToFirestore(user.uid, userProfile);
         setProfile(userProfile);
       } else {
         setGoogleUser(null);
@@ -133,7 +142,7 @@ export default function App() {
         const welcomeMsg: Message = {
           id: `msg-${Date.now()}-auth-welcome`,
           role: 'assistant',
-          content: `Votre compte Google (${result.user.email}) est connecté. Toutes vos discussions et la mémoire de vos préférences sont désormais sauvegardées sur votre profil. Je peux également expédier vos e-mails via Gmail et synchroniser votre agenda Google à votre demande.`,
+          content: `Votre compte Google (${result.user.email}) est connecté. Toutes vos discussions, mémoires et automatisations sont sauvegardées sur Firebase et Google Workspace. Je peux expédier vos e-mails via Gmail, synchroniser votre Google Calendar et gérer vos Google Tasks.`,
           timestamp: Date.now(),
         };
 
@@ -146,6 +155,7 @@ export default function App() {
           );
           const updated = { ...prev, conversations: updatedConversations };
           saveProfileData(updated);
+          syncProfileToFirestore(prev.userId, updated);
           return updated;
         });
       }
@@ -166,6 +176,8 @@ export default function App() {
   // Conversation Management Handlers
   const handleCreateNewChat = () => {
     const { profile: updatedProfile } = createNewConversation(profile);
+    saveProfileData(updatedProfile);
+    syncProfileToFirestore(updatedProfile.userId, updatedProfile);
     setProfile(updatedProfile);
     setCurrentTab('chat');
   };
@@ -176,28 +188,37 @@ export default function App() {
       activeConversationId: convId,
     };
     saveProfileData(updated);
+    syncProfileToFirestore(updated.userId, updated);
     setProfile(updated);
     setCurrentTab('chat');
   };
 
   const handleDeleteConversation = (convId: string) => {
     const updated = deleteConversation(profile, convId);
+    saveProfileData(updated);
+    syncProfileToFirestore(updated.userId, updated);
     setProfile(updated);
   };
 
   const handleRenameConversation = (convId: string, newTitle: string) => {
     const updated = renameConversation(profile, convId, newTitle);
+    saveProfileData(updated);
+    syncProfileToFirestore(updated.userId, updated);
     setProfile(updated);
   };
 
   // Memory Handlers
   const handleAddMemory = (category: MemoryItem['category'], content: string) => {
     const updated = addMemoryItem(profile, category, content);
+    saveProfileData(updated);
+    syncProfileToFirestore(updated.userId, updated);
     setProfile(updated);
   };
 
   const handleRemoveMemory = (id: string) => {
     const updated = removeMemoryItem(profile, id);
+    saveProfileData(updated);
+    syncProfileToFirestore(updated.userId, updated);
     setProfile(updated);
   };
 
@@ -211,7 +232,6 @@ export default function App() {
           let resolvedCity = 'Position active';
 
           try {
-            // Free OpenStreetMap reverse geocoding
             const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`, {
               headers: { 'Accept': 'application/json' },
             });
@@ -220,8 +240,7 @@ export default function App() {
               resolvedCity = data.address?.city || data.address?.town || data.address?.village || data.address?.municipality || 'Position active';
             }
           } catch {
-            const closest = getRestaurantsForCity(undefined, lat, lng);
-            resolvedCity = closest.city;
+            resolvedCity = 'Position active';
           }
 
           setUserLocation({
@@ -234,28 +253,10 @@ export default function App() {
         },
         async (error) => {
           console.warn('Geolocation access declined or error:', error);
-          let fallbackCity = 'Paris';
-          let fallbackLat = 48.8566;
-          let fallbackLng = 2.3522;
-
-          try {
-            const ipRes = await fetch('https://api.bigdatacloud.net/data/reverse-geocode-client');
-            if (ipRes.ok) {
-              const ipData = await ipRes.json();
-              if (ipData.city) {
-                fallbackCity = ipData.city;
-                fallbackLat = ipData.latitude || fallbackLat;
-                fallbackLng = ipData.longitude || fallbackLng;
-              }
-            }
-          } catch {
-            // keep default
-          }
-
           setUserLocation({
-            latitude: fallbackLat,
-            longitude: fallbackLng,
-            city: fallbackCity,
+            latitude: 48.8566,
+            longitude: 2.3522,
+            city: 'Paris',
             isAllowed: true,
           });
         },
@@ -267,181 +268,6 @@ export default function App() {
   useEffect(() => {
     requestLocation();
   }, []);
-
-  // Helper to extract JSON blocks from model response with strict user preference enforcement
-  const parseAIContent = (rawText: string, userPrompt: string = '') => {
-    let cleanText = rawText;
-    let restaurants: Restaurant[] | undefined;
-    let emailAction: EmailAction | undefined;
-    let appointmentAction: AppointmentAction | undefined;
-    let taskAction: GoogleTaskAction | undefined;
-    let driveAction: GoogleDriveAction | undefined;
-    let scheduledTaskAction: ScheduledTaskAction | undefined;
-
-    const userPromptLower = userPrompt.toLowerCase();
-    const explicitEmailMatch = userPrompt.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
-
-    // Check for ```json:restaurants ... ```
-    const restoMatch = rawText.match(/```json:restaurants\s*([\s\S]*?)\s*```/);
-    if (restoMatch) {
-      try {
-        restaurants = JSON.parse(restoMatch[1]);
-        cleanText = cleanText.replace(restoMatch[0], '').trim();
-      } catch (err) {
-        console.warn('Failed to parse restaurants JSON', err);
-      }
-    }
-
-    // Check for ```json:email_action ... ```
-    const emailMatch = rawText.match(/```json:email_action\s*([\s\S]*?)\s*```/);
-    if (emailMatch) {
-      try {
-        const parsed = JSON.parse(emailMatch[1]);
-        emailAction = sanitizeEmailAction(parsed, userPrompt);
-        cleanText = cleanText.replace(emailMatch[0], '').trim();
-      } catch (err) {
-        console.warn('Failed to parse email JSON', err);
-      }
-    }
-
-    // If user asked to send an email or provided an explicit email address but no block was returned
-    if (!emailAction && (explicitEmailMatch || userPromptLower.includes('mail') || userPromptLower.includes('email') || userPromptLower.includes('envoyer'))) {
-      const extracted = extractSpecificEmailRequest(userPrompt);
-      emailAction = {
-        recipient: explicitEmailMatch ? explicitEmailMatch[1].trim() : extracted.recipient,
-        subject: extracted.subject,
-        body: extracted.body,
-        status: 'sent',
-        autoSent: true,
-        sentAt: Date.now(),
-      };
-    }
-
-    // Eradicate any hallucinated 'contact@partenaire.com' or dummy emails from model text
-    if (emailAction) {
-      cleanText = cleanText.replace(/contact@partenaire\.com/g, emailAction.recipient);
-      cleanText = cleanText.replace(/alexandre\.durand@pilote\.studio/g, emailAction.recipient);
-      cleanText = cleanText.replace(/partenaire\.com/g, emailAction.recipient.split('@')[1] || 'contact.fr');
-    }
-
-    // Check for ```json:appointment_action ... ```
-    const apptMatch = rawText.match(/```json:appointment_action\s*([\s\S]*?)\s*```/);
-    if (apptMatch) {
-      try {
-        appointmentAction = JSON.parse(apptMatch[1]);
-        cleanText = cleanText.replace(apptMatch[0], '').trim();
-      } catch (err) {
-        console.warn('Failed to parse appointment JSON', err);
-      }
-    }
-
-    // Check for ```json:task_action ... ```
-    const taskMatch = rawText.match(/```json:task_action\s*([\s\S]*?)\s*```/);
-    if (taskMatch) {
-      try {
-        taskAction = JSON.parse(taskMatch[1]);
-        cleanText = cleanText.replace(taskMatch[0], '').trim();
-      } catch (err) {
-        console.warn('Failed to parse task JSON', err);
-      }
-    }
-
-    // Check for ```json:drive_action ... ```
-    const driveMatch = rawText.match(/```json:drive_action\s*([\s\S]*?)\s*```/);
-    if (driveMatch) {
-      try {
-        driveAction = JSON.parse(driveMatch[1]);
-        cleanText = cleanText.replace(driveMatch[0], '').trim();
-      } catch (err) {
-        console.warn('Failed to parse drive JSON', err);
-      }
-    }
-
-    // Check for ```json:scheduled_task_action ... ```
-    const scheduledMatch = rawText.match(/```json:scheduled_task_action\s*([\s\S]*?)\s*```/);
-    if (scheduledMatch) {
-      try {
-        scheduledTaskAction = JSON.parse(scheduledMatch[1]);
-        cleanText = cleanText.replace(scheduledMatch[0], '').trim();
-        if (scheduledTaskAction) {
-          // Auto add to user profile scheduled tasks
-          setProfile((prev) => {
-            const { profile: updated } = addScheduledTask(prev, {
-              instruction: scheduledTaskAction!.instruction,
-              frequency: scheduledTaskAction!.frequency,
-              timeOfDay: scheduledTaskAction!.timeOfDay || '08:30',
-              targetWorkspace: scheduledTaskAction!.targetWorkspace || 'auto',
-              enabled: true,
-            });
-            return updated;
-          });
-        }
-      } catch (err) {
-        console.warn('Failed to parse scheduled task JSON', err);
-      }
-    }
-
-    // Restaurants fallback for city if requested but missing
-    if (!restaurants && (userPromptLower.includes('resto') || userPromptLower.includes('restaurant') || userPromptLower.includes('manger') || userPromptLower.includes('dîner'))) {
-      const detected = detectCityInText(userPrompt);
-      const cityData = getRestaurantsForCity(detected ? detected.name : userLocation?.city, userLocation?.latitude, userLocation?.longitude);
-      restaurants = cityData.restaurants;
-    }
-
-    return { cleanText, restaurants, emailAction, appointmentAction, taskAction, driveAction, scheduledTaskAction };
-  };
-
-  // Direct client-side inference fallback (for static Vercel hosting)
-  const callDirectNvidiaFallback = async (allMessages: Message[]): Promise<string> => {
-    const memoryContext = buildMemoryContextPrompt(profile);
-    const lastUser = allMessages[allMessages.length - 1]?.content || '';
-    const detectedCity = detectCityInText(lastUser);
-    const activeCity = detectedCity ? detectedCity.name : (userLocation?.city || 'Paris');
-
-    const systemPrompt = `Tu es Pilote 1, un assistant personnel d'élite doté d'une interface ultra-élégante et intuitive.
-Tu as accès à l'ensemble de Google Workspace (Gmail, Google Calendar, Google Tasks, Google Drive) ainsi qu'à la géolocalisation de l'utilisateur (Ville active : ${activeCity}) et à l'API Google Maps officielle.
-Tu exécutes directement les requêtes de l'utilisateur : TU DIS DE FAIRE ET IL FAIT. Ne pose pas de questions inutiles, rédige et exécute immédiatement.
-
-RÈGLE ABSOLUE D'IDENTITÉ : Tu es UNIQUEMENT et TOUJOURS "Pilote 1". Tu ne dois JAMAIS citer ni divulguer le nom d'un modèle d'IA sous-jacent.
-
-FORMATS STRUCTURÉS D'ACTION :
-1. Restaurants : bloc \`\`\`json:restaurants ... \`\`\`
-2. Envoi d'e-mail : bloc \`\`\`json:email_action ... \`\`\` (respecte strictement l'email fourni)
-3. Rendez-vous Calendar : bloc \`\`\`json:appointment_action ... \`\`\`
-4. Google Tasks : bloc \`\`\`json:task_action ... \`\`\`
-5. Google Drive : bloc \`\`\`json:drive_action ... \`\`\`
-6. Tâche récurrente / quotidienne : bloc \`\`\`json:scheduled_task_action ... \`\`\`
-
-${googleUser ? `[L'utilisateur est connecté avec son compte Google : ${googleUser.email}. Toutes les actions Google Workspace sont synchronisées en direct.]` : ''}
-${memoryContext}`;
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 7000);
-
-    const response = await fetch(`${NVIDIA_BASE_URL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${NVIDIA_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: MODEL_NAME,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          ...allMessages.map(m => ({ role: m.role, content: m.content })),
-        ],
-        temperature: 0.5,
-        max_tokens: 2048,
-      }),
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeoutId);
-
-    if (!response.ok) throw new Error('API Direct error');
-    const data = await response.json();
-    return data.choices?.[0]?.message?.content || 'Je suis à votre disposition.';
-  };
 
   const handleSendMessage = async (text: string, attachments: Attachment[]) => {
     const userMessage: Message = {
@@ -470,63 +296,42 @@ ${memoryContext}`;
       );
       const updated = { ...prev, conversations: updatedConversations };
       saveProfileData(updated);
+      syncProfileToFirestore(prev.userId, updated);
       return updated;
     });
 
     setIsThinking(true);
 
     try {
-      let rawContent = '';
+      // Execute robust multi-layered AI completion service (Dev, Server, Direct & Fallback)
+      const aiResult = await sendChatMessage(newMessages, profile, userLocation, googleUser);
 
-      // Try server /api/chat route first with user memory context
-      try {
-        const memoryContext = buildMemoryContextPrompt(profile);
-        const response = await fetch('/api/chat', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            messages: newMessages.map((m) => ({
-              role: m.role,
-              content: m.content,
-            })),
-            memoryContext,
-            userLocation: userLocation
-              ? {
-                  latitude: userLocation.latitude,
-                  longitude: userLocation.longitude,
-                  city: userLocation.city,
-                }
-              : undefined,
-          }),
+      // Auto create task in state if returned
+      if (aiResult.scheduledTaskAction) {
+        setProfile((prev) => {
+          const { profile: updated } = addScheduledTask(prev, {
+            instruction: aiResult.scheduledTaskAction!.instruction,
+            frequency: aiResult.scheduledTaskAction!.frequency,
+            timeOfDay: aiResult.scheduledTaskAction!.timeOfDay || '08:30',
+            targetWorkspace: aiResult.scheduledTaskAction!.targetWorkspace || 'auto',
+            enabled: true,
+          });
+          syncProfileToFirestore(prev.userId, updated);
+          return updated;
         });
-
-        if (response.ok) {
-          const data = await response.json();
-          rawContent = data.content || '';
-        } else {
-          throw new Error('API route failed');
-        }
-      } catch (serverErr) {
-        // Fallback for Vercel static deployments
-        console.warn('Passing through client direct fallback for Vercel:', serverErr);
-        rawContent = await callDirectNvidiaFallback(newMessages);
       }
-
-      const { cleanText, restaurants, emailAction, appointmentAction, taskAction, driveAction, scheduledTaskAction } = parseAIContent(rawContent, text);
 
       const assistantMessage: Message = {
         id: `msg-${Date.now()}-ai`,
         role: 'assistant',
-        content: cleanText || "Je reste à votre entière disposition.",
+        content: aiResult.cleanText || "Je reste à votre entière disposition.",
         timestamp: Date.now(),
-        restaurants,
-        emailAction,
-        appointmentAction,
-        taskAction,
-        driveAction,
-        scheduledTaskAction,
+        restaurants: aiResult.restaurants,
+        emailAction: aiResult.emailAction,
+        appointmentAction: aiResult.appointmentAction,
+        taskAction: aiResult.taskAction,
+        driveAction: aiResult.driveAction,
+        scheduledTaskAction: aiResult.scheduledTaskAction,
       };
 
       // Persist assistant message in active conversation
@@ -538,6 +343,7 @@ ${memoryContext}`;
         );
         const updated = { ...prev, conversations: updatedConversations };
         saveProfileData(updated);
+        syncProfileToFirestore(prev.userId, updated);
         return updated;
       });
     } catch (err: any) {
@@ -557,6 +363,7 @@ ${memoryContext}`;
         );
         const updated = { ...prev, conversations: updatedConversations };
         saveProfileData(updated);
+        syncProfileToFirestore(prev.userId, updated);
         return updated;
       });
     } finally {
@@ -568,14 +375,16 @@ ${memoryContext}`;
   const handleExecuteScheduledTaskNow = async (task: ScheduledTask) => {
     setIsExecutingScheduledTask(true);
     try {
-      // Execute the task instruction directly in the chat
       await handleSendMessage(task.instruction, []);
-      // Record execution in task history
       const updated = recordScheduledTaskExecution(profile, task.id, `Exécutée avec succès : "${task.instruction.slice(0, 45)}..."`, 'success');
+      saveProfileData(updated);
+      syncProfileToFirestore(updated.userId, updated);
       setProfile(updated);
     } catch (err) {
       console.error('Erreur exécution tâche:', err);
       const updated = recordScheduledTaskExecution(profile, task.id, 'Erreur lors de l\'exécution.', 'failed');
+      saveProfileData(updated);
+      syncProfileToFirestore(updated.userId, updated);
       setProfile(updated);
     } finally {
       setIsExecutingScheduledTask(false);
