@@ -1,11 +1,36 @@
 export default async function handler(req: any, res: any) {
+  // Handle CORS preflight
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization'
+  );
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
   const NVIDIA_API_KEY = process.env.NVIDIA_API_KEY || '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';
   const NVIDIA_BASE_URL = 'https://integrate.api.nvidia.com/v1';
-  const MODEL_NAME = 'deepseek-ai/deepseek-v4.1-flash';
+
+  // Multi-provider priority list for NVIDIA NIM API
+  // Primary: meta/llama-3.2-11b-vision-instruct (highly available, fast, full chat/JSON compliance)
+  // Fallbacks: z-ai/glm-5.3-flash, openai/gpt-oss-20b, deepseek-ai/deepseek-v4.1-flash
+  const CANDIDATE_MODELS = [
+    process.env.NVIDIA_MODEL_NAME || 'meta/llama-3.2-11b-vision-instruct',
+    'meta/llama-3.2-11b-vision-instruct',
+    'z-ai/glm-5.3-flash',
+    'openai/gpt-oss-20b',
+    'deepseek-ai/deepseek-v4.1-flash',
+  ];
+  // Deduplicate preserving order
+  const MODELS_TO_TRY = [...new Set(CANDIDATE_MODELS)];
 
   const SYSTEM_PROMPT = `Tu es Pilote 1, un assistant personnel d'élite doté d'une interface ultra-élégante et intuitive.
 Tu as accès à l'ensemble de Google Workspace (Gmail, Google Calendar, Google Tasks, Google Drive) ainsi qu'à la géolocalisation et l'API Google Maps officielle.
@@ -120,47 +145,80 @@ Si l'utilisateur te demande de planifier ou exécuter une tâche tous les jours 
       })),
     ];
 
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
+    let replyContent = '';
+    let usedModel = '';
+    let lastError: any = null;
 
-      const response = await fetch(`${NVIDIA_BASE_URL}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${NVIDIA_API_KEY}`,
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: JSON.stringify({
-          model: MODEL_NAME,
-          messages: formattedMessages,
-          temperature: 0.6,
-          max_tokens: 2048,
-          stream: false,
-        }),
-        signal: controller.signal,
-      });
+    // Multi-model resilience loop: iterate through candidate models with a controlled timeout
+    for (const model of MODELS_TO_TRY) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 12000);
 
-      clearTimeout(timeoutId);
+        const response = await fetch(`${NVIDIA_BASE_URL}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${NVIDIA_API_KEY}`,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+          body: JSON.stringify({
+            model,
+            messages: formattedMessages,
+            temperature: 0.6,
+            max_tokens: 2048,
+            stream: false,
+          }),
+          signal: controller.signal,
+        });
 
-      if (!response.ok) {
-        throw new Error(`API returned status ${response.status}`);
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          const errText = await response.text();
+          console.warn(`Model ${model} returned HTTP ${response.status}:`, errText);
+          lastError = new Error(`Model ${model} returned ${response.status}`);
+          continue;
+        }
+
+        const data = await response.json();
+        const choice = data?.choices?.[0];
+        const msg = choice?.message;
+
+        const candidateReply =
+          msg?.content ||
+          msg?.reasoning_content ||
+          msg?.reasoning ||
+          choice?.delta?.content ||
+          '';
+
+        if (candidateReply && candidateReply.trim().length > 0) {
+          replyContent = candidateReply;
+          usedModel = model;
+          break;
+        }
+      } catch (err: any) {
+        console.warn(`Attempt with model ${model} failed:`, err?.message || err);
+        lastError = err;
       }
+    }
 
-      const data = await response.json();
-      const replyContent = data.choices?.[0]?.message?.content || 'Je suis à votre écoute.';
-
+    if (replyContent && replyContent.trim().length > 0) {
       return res.status(200).json({
         content: replyContent,
         model: 'Pilote 1',
-      });
-    } catch (apiError: any) {
-      console.warn('Vercel serverless fallback triggered:', apiError.message);
-      return res.status(200).json({
-        content: `Je suis à votre écoute. Comment puis-je vous accompagner pour vos restaurants, e-mails, rendez-vous ou projets ?`,
-        model: 'Pilote 1',
+        provider: 'NVIDIA NIM',
+        backendModel: usedModel,
       });
     }
+
+    // Graceful fallback if NVIDIA network is completely unreachable
+    console.warn('All NVIDIA NIM models failed, using intelligent fallback. Last error:', lastError?.message);
+    return res.status(200).json({
+      content: `Je suis Pilote 1, votre copilote intelligent. Comment puis-je vous accompagner aujourd'hui pour vos restaurants avec carte interactive, l'envoi d'e-mails via Gmail, la gestion d'agenda ou vos tâches Google Workspace ?`,
+      model: 'Pilote 1',
+      fallback: true,
+    });
   } catch (err: any) {
     return res.status(500).json({ error: err.message || 'Erreur serveur' });
   }

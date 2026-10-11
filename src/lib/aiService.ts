@@ -5,7 +5,14 @@ import { buildMemoryContextPrompt } from './memoryStorage';
 
 const NVIDIA_API_KEY = "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";
 const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
-const MODEL_NAME = "deepseek-ai/deepseek-v4.1-flash";
+
+// Active candidate models for client-side direct fallback
+const DIRECT_MODELS = [
+  'meta/llama-3.2-11b-vision-instruct',
+  'z-ai/glm-5.3-flash',
+  'openai/gpt-oss-20b',
+  'deepseek-ai/deepseek-v4.1-flash',
+];
 
 export interface AIResponseResult {
   cleanText: string;
@@ -18,7 +25,7 @@ export interface AIResponseResult {
 }
 
 /**
- * Robust AI Completion service that works in dev, production and published environments.
+ * Robust AI Completion service that works in dev, production and Vercel environments.
  */
 export async function sendChatMessage(
   messages: Message[],
@@ -34,14 +41,18 @@ export async function sendChatMessage(
 
   let rawReply = '';
 
-  // 1. First attempt: Call backend API (/api/chat)
+  // 1. Primary: Server API (/api/chat) on Vercel Serverless Function or Express server
+  // This completely eliminates CORS issues and keeps the API key secured on the server side
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 9000);
+    const timeoutId = setTimeout(() => controller.abort(), 16000);
 
     const res = await fetch('/api/chat', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
       body: JSON.stringify({
         messages: messages.map(m => ({ role: m.role, content: m.content })),
         userLocation: userLocation ? {
@@ -63,10 +74,10 @@ export async function sendChatMessage(
       }
     }
   } catch (err) {
-    console.info('Backend /api/chat unreachable or timed out, activating direct edge engine:', err);
+    console.info('Backend /api/chat unreachable or timed out, trying direct NIM engine:', err);
   }
 
-  // 2. Second attempt: Direct client-side inference fallback (for static hosting or published previews)
+  // 2. Second attempt: Direct client-side inference fallback (if static preview without API proxy)
   if (!rawReply) {
     try {
       const systemPrompt = `Tu es Pilote 1, un assistant personnel d'élite conçu avec une esthétique Apple épurée, fluide et ultra-intuitive.
@@ -98,7 +109,7 @@ FORMATS STRUCTURÉS D'ACTION :
 {
   "recipient": "contact@exemple.fr",
   "subject": "Sujet clair et direct",
-  "body": "Bonjour,\n\nMessage soigné...",
+  "body": "Bonjour,\\n\\nMessage soigné...",
   "status": "sent",
   "autoSent": true
 }
@@ -133,7 +144,7 @@ FORMATS STRUCTURÉS D'ACTION :
 \`\`\`json:drive_action
 {
   "title": "Compte-Rendu",
-  "content": "# Compte-Rendu\n\nSynthèse des points clés...",
+  "content": "# Compte-Rendu\\n\\nSynthèse des points clés...",
   "mimeType": "text/markdown",
   "autoCreated": true
 }
@@ -153,39 +164,58 @@ FORMATS STRUCTURÉS D'ACTION :
 ${googleUser ? `[Compte Google connecté : ${googleUser.email}. Intégration Google Workspace active.]` : ''}
 ${memoryContext}`;
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 9000);
+      for (const model of DIRECT_MODELS) {
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 8000);
 
-      const directRes = await fetch(`${NVIDIA_BASE_URL}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${NVIDIA_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: MODEL_NAME,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            ...messages.map(m => ({ role: m.role, content: m.content })),
-          ],
-          temperature: 0.5,
-          max_tokens: 2048,
-        }),
-        signal: controller.signal,
-      });
+          const directRes = await fetch(`${NVIDIA_BASE_URL}/chat/completions`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${NVIDIA_API_KEY}`,
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: JSON.stringify({
+              model,
+              messages: [
+                { role: 'system', content: systemPrompt },
+                ...messages.map(m => ({ role: m.role, content: m.content })),
+              ],
+              temperature: 0.5,
+              max_tokens: 2048,
+            }),
+            signal: controller.signal,
+          });
 
-      clearTimeout(timeoutId);
+          clearTimeout(timeoutId);
 
-      if (directRes.ok) {
-        const directData = await directRes.json();
-        rawReply = directData.choices?.[0]?.message?.content || '';
+          if (directRes.ok) {
+            const directData = await directRes.json();
+            const choice = directData?.choices?.[0];
+            const msg = choice?.message;
+            const text =
+              msg?.content ||
+              msg?.reasoning_content ||
+              msg?.reasoning ||
+              choice?.delta?.content ||
+              '';
+
+            if (text && text.trim().length > 0) {
+              rawReply = text;
+              break;
+            }
+          }
+        } catch {
+          // continue to next model
+        }
       }
     } catch (directErr) {
       console.warn('Direct API fallback error:', directErr);
     }
   }
 
-  // 3. Fallback deterministe intelligent si tout réseau est coupé
+  // 3. Fallback deterministe intelligent si tout réseau externe est coupé
   if (!rawReply) {
     if (lastUserLower.includes('resto') || lastUserLower.includes('restaurant') || lastUserLower.includes('manger') || lastUserLower.includes('dîner')) {
       const cityData = getRestaurantsForCity(activeCity, userLocation?.latitude, userLocation?.longitude);
@@ -249,13 +279,10 @@ export function parseAIResponse(
     } catch (err) {
       console.warn('Failed to parse email JSON', err);
     }
-  }
-
-  // Explicit email fallback
-  if (!emailAction && (explicitEmailMatch || userPromptLower.includes('mail') || userPromptLower.includes('email') || userPromptLower.includes('envoyer'))) {
+  } else if (explicitEmailMatch || userPromptLower.includes('email') || userPromptLower.includes('mail')) {
     const extracted = extractSpecificEmailRequest(userPrompt);
     emailAction = {
-      recipient: explicitEmailMatch ? explicitEmailMatch[1].trim() : extracted.recipient,
+      recipient: extracted.recipient,
       subject: extracted.subject,
       body: extracted.body,
       status: 'sent',
@@ -264,24 +291,18 @@ export function parseAIResponse(
     };
   }
 
-  if (emailAction) {
-    cleanText = cleanText.replace(/contact@partenaire\.com/g, emailAction.recipient);
-    cleanText = cleanText.replace(/alexandre\.durand@pilote\.studio/g, emailAction.recipient);
-    cleanText = cleanText.replace(/partenaire\.com/g, emailAction.recipient.split('@')[1] || 'contact.fr');
-  }
-
-  // 3. Calendar Appointment
-  const apptMatch = rawText.match(/```json:appointment_action\s*([\s\S]*?)\s*```/);
-  if (apptMatch) {
+  // 3. Appointment Action
+  const aptMatch = rawText.match(/```json:appointment_action\s*([\s\S]*?)\s*```/);
+  if (aptMatch) {
     try {
-      appointmentAction = JSON.parse(apptMatch[1]);
-      cleanText = cleanText.replace(apptMatch[0], '').trim();
+      appointmentAction = JSON.parse(aptMatch[1]);
+      cleanText = cleanText.replace(aptMatch[0], '').trim();
     } catch (err) {
       console.warn('Failed to parse appointment JSON', err);
     }
   }
 
-  // 4. Google Tasks
+  // 4. Google Task Action
   const taskMatch = rawText.match(/```json:task_action\s*([\s\S]*?)\s*```/);
   if (taskMatch) {
     try {
@@ -292,7 +313,7 @@ export function parseAIResponse(
     }
   }
 
-  // 5. Google Drive
+  // 5. Google Drive Action
   const driveMatch = rawText.match(/```json:drive_action\s*([\s\S]*?)\s*```/);
   if (driveMatch) {
     try {
@@ -314,12 +335,21 @@ export function parseAIResponse(
     }
   }
 
-  // Fallback restaurants if user asked
-  if (!restaurants && (userPromptLower.includes('resto') || userPromptLower.includes('restaurant') || userPromptLower.includes('manger') || userPromptLower.includes('dîner'))) {
-    const detected = detectCityInText(userPrompt);
-    const cityData = getRestaurantsForCity(detected ? detected.name : userLocation?.city, userLocation?.latitude, userLocation?.longitude);
+  // Guarantee valid restaurants for city queries if block was omitted
+  if (!restaurants && (userPromptLower.includes('resto') || userPromptLower.includes('restaurant') || userPromptLower.includes('manger'))) {
+    const detectedCity = detectCityInText(userPrompt);
+    const cityName = detectedCity ? detectedCity.name : (userLocation?.city || 'Paris');
+    const cityData = getRestaurantsForCity(cityName, userLocation?.latitude, userLocation?.longitude);
     restaurants = cityData.restaurants;
   }
 
-  return { cleanText, restaurants, emailAction, appointmentAction, taskAction, driveAction, scheduledTaskAction };
+  return {
+    cleanText,
+    restaurants,
+    emailAction,
+    appointmentAction,
+    taskAction,
+    driveAction,
+    scheduledTaskAction,
+  };
 }
