@@ -1,4 +1,4 @@
-import { Message, UserLocation, Restaurant, EmailAction, AppointmentAction, GoogleTaskAction, GoogleDriveAction, ScheduledTaskAction, UserProfileData } from '../types';
+import { Message, UserLocation, Restaurant, EmailAction, AppointmentAction, GoogleTaskAction, GoogleDriveAction, ScheduledTaskAction, UserProfileData, PiloteModelId } from '../types';
 import { getRestaurantsForCity, detectCityInText } from './cityRestaurants';
 import { extractSpecificEmailRequest, sanitizeEmailAction } from './emailExtractor';
 import { buildMemoryContextPrompt } from './memoryStorage';
@@ -6,16 +6,10 @@ import { buildMemoryContextPrompt } from './memoryStorage';
 const NVIDIA_API_KEY = "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";
 const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
 
-// Active candidate models for client-side direct fallback
-const DIRECT_MODELS = [
-  'meta/llama-3.2-11b-vision-instruct',
-  'z-ai/glm-5.3-flash',
-  'openai/gpt-oss-20b',
-  'deepseek-ai/deepseek-v4.1-flash',
-];
-
 export interface AIResponseResult {
   cleanText: string;
+  thinking?: string;
+  modelUsed?: string;
   restaurants?: Restaurant[];
   emailAction?: EmailAction;
   appointmentAction?: AppointmentAction;
@@ -31,7 +25,9 @@ export async function sendChatMessage(
   messages: Message[],
   profile: UserProfileData,
   userLocation: UserLocation | null,
-  googleUser: { email?: string | null } | null
+  googleUser: { email?: string | null } | null,
+  modelId: PiloteModelId = 'flash',
+  thinkingEnabled: boolean = false
 ): Promise<AIResponseResult> {
   const lastUserMsg = messages[messages.length - 1]?.content || '';
   const lastUserLower = lastUserMsg.toLowerCase();
@@ -39,10 +35,23 @@ export async function sendChatMessage(
   const activeCity = detectedCity ? detectedCity.name : (userLocation?.city || 'Paris');
   const memoryContext = buildMemoryContextPrompt(profile);
 
+  // Model branding mapping
+  const publicModelName = modelId === 'large' ? 'Pilote 1 Large' : modelId === 'mini' ? 'Pilote 1 Mini' : 'Pilote 1 Flash';
+  const primaryNvidiaModel = modelId === 'large' ? 'z-ai/glm-5.3-flash' : 'meta/llama-3.2-11b-vision-instruct';
+
+  const DIRECT_MODELS = [
+    primaryNvidiaModel,
+    'meta/llama-3.2-11b-vision-instruct',
+    'z-ai/glm-5.3-flash',
+    'openai/gpt-oss-20b',
+    'deepseek-ai/deepseek-v4.1-flash',
+  ];
+
   let rawReply = '';
+  let extractedThinking = '';
+  let reportedModel = publicModelName;
 
   // 1. Primary: Server API (/api/chat) on Vercel Serverless Function or Express server
-  // This completely eliminates CORS issues and keeps the API key secured on the server side
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 16000);
@@ -61,6 +70,8 @@ export async function sendChatMessage(
           city: userLocation.city,
         } : undefined,
         memoryContext,
+        modelId,
+        thinkingEnabled,
       }),
       signal: controller.signal,
     });
@@ -71,6 +82,12 @@ export async function sendChatMessage(
       const data = await res.json();
       if (data && typeof data.content === 'string' && data.content.trim().length > 0) {
         rawReply = data.content;
+        if (data.thinking) {
+          extractedThinking = data.thinking;
+        }
+        if (data.model) {
+          reportedModel = data.model;
+        }
       }
     }
   } catch (err) {
@@ -80,11 +97,14 @@ export async function sendChatMessage(
   // 2. Second attempt: Direct client-side inference fallback (if static preview without API proxy)
   if (!rawReply) {
     try {
-      const systemPrompt = `Tu es Pilote 1, un assistant personnel d'élite conçu avec une esthétique Apple épurée, fluide et ultra-intuitive.
+      const systemPrompt = `Tu es ${publicModelName}, un assistant personnel d'élite conçu avec une esthétique Apple épurée, fluide et ultra-intuitive.
 Tu as accès à l'ensemble de Google Workspace (Gmail, Google Calendar, Google Tasks, Google Drive) ainsi qu'à la géolocalisation de l'utilisateur (Ville active : ${activeCity}) et à l'API Google Maps officielle.
 Tu exécutes directement les requêtes de l'utilisateur : TU DIS DE FAIRE ET IL FAIT. Ne pose pas de questions inutiles, rédige et exécute immédiatement.
 
-RÈGLE ABSOLUE D'IDENTITÉ : Tu es UNIQUEMENT et TOUJOURS "Pilote 1". Tu ne dois JAMAIS citer ni divulguer le nom d'un modèle d'IA sous-jacent.
+RÈGLE ABSOLUE D'IDENTITÉ : Tu es UNIQUEMENT et TOUJOURS "${publicModelName}". Si jamais on te demande quel modèle tu es ou qui tu es, réponds toujours fermement : "Je suis ${publicModelName}". Tu ne dois JAMAIS citer de noms d'autres modèles sous-jacents.
+
+${thinkingEnabled ? `RÈGLE DE RÉFLEXION ACTIVÉE :
+L'utilisateur a activé le bouton Réflexion. Rédige d'abord tes réflexions internes dans un bloc <thinking>...</thinking> puis ta réponse finale.` : ''}
 
 FORMATS STRUCTURÉS D'ACTION :
 1. Restaurants (Google Maps) :
@@ -167,7 +187,7 @@ ${memoryContext}`;
       for (const model of DIRECT_MODELS) {
         try {
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 8000);
+          const timeoutId = setTimeout(() => controller.abort(), 10000);
 
           const directRes = await fetch(`${NVIDIA_BASE_URL}/chat/completions`, {
             method: 'POST',
@@ -194,15 +214,22 @@ ${memoryContext}`;
             const directData = await directRes.json();
             const choice = directData?.choices?.[0];
             const msg = choice?.message;
+
+            if (msg?.reasoning_content) {
+              extractedThinking = msg.reasoning_content;
+            }
+
             const text =
               msg?.content ||
-              msg?.reasoning_content ||
               msg?.reasoning ||
               choice?.delta?.content ||
               '';
 
             if (text && text.trim().length > 0) {
               rawReply = text;
+              break;
+            } else if (msg?.reasoning_content && !rawReply) {
+              rawReply = msg.reasoning_content;
               break;
             }
           }
@@ -215,7 +242,16 @@ ${memoryContext}`;
     }
   }
 
-  // 3. Fallback deterministe intelligent si tout réseau externe est coupé
+  // 3. Extract inline <thinking> tags if returned
+  if (rawReply.includes('<thinking>')) {
+    const match = rawReply.match(/<thinking>([\s\S]*?)<\/thinking>/i);
+    if (match) {
+      extractedThinking = match[1].trim();
+      rawReply = rawReply.replace(match[0], '').trim();
+    }
+  }
+
+  // 4. Deterministic fallback if external network is unavailable
   if (!rawReply) {
     if (lastUserLower.includes('resto') || lastUserLower.includes('restaurant') || lastUserLower.includes('manger') || lastUserLower.includes('dîner')) {
       const cityData = getRestaurantsForCity(activeCity, userLocation?.latitude, userLocation?.longitude);
@@ -232,11 +268,20 @@ ${memoryContext}`;
     } else if (lastUserLower.includes('tâche') || lastUserLower.includes('task') || lastUserLower.includes('rappel') || lastUserLower.includes('todo')) {
       rawReply = `J'ai enregistré cette tâche dans votre **Google Tasks** :\n\n\`\`\`json:task_action\n{\n  "title": "${lastUserMsg.replace(/ajoute|crée|note|fais/gi, '').trim() || 'Priorité du jour'}",\n  "dueDate": "${new Date().toISOString().split('T')[0]}",\n  "status": "created",\n  "autoCreated": true\n}\n\`\`\`\n\nTâche ajoutée à votre liste.`;
     } else {
-      rawReply = `Je suis **Pilote 1**, votre copilote intelligent. Vos requêtes sont exécutées de manière autonome (Google Workspace, Restaurants, Emails, Agenda et Tâches quotidiennes).`;
+      rawReply = `Je suis **${publicModelName}**, votre copilote intelligent. Vos requêtes sont exécutées de manière autonome (Google Workspace, Restaurants, Emails, Agenda et Tâches quotidiennes).`;
+    }
+
+    if (thinkingEnabled && !extractedThinking) {
+      extractedThinking = `Analyse en cours avec le moteur ${publicModelName}. Validation des contextes de géolocalisation et des permissions Google Workspace.`;
     }
   }
 
-  return parseAIResponse(rawReply, lastUserMsg, userLocation);
+  const parsed = parseAIResponse(rawReply, lastUserMsg, userLocation);
+  return {
+    ...parsed,
+    thinking: extractedThinking || undefined,
+    modelUsed: reportedModel,
+  };
 }
 
 /**

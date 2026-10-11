@@ -103,11 +103,34 @@ app.use((req, res, next) => {
 // POST /api/chat
 app.post('/api/chat', async (req, res) => {
   try {
-    const { messages, userLocation, memoryContext } = req.body;
+    const { messages, userLocation, memoryContext, modelId = 'flash', thinkingEnabled = false } = req.body;
 
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: 'Messages array is required' });
     }
+
+    let primaryNvidiaModel = 'meta/llama-3.2-11b-vision-instruct';
+    let publicName = 'Pilote 1 Flash';
+
+    if (modelId === 'large') {
+      primaryNvidiaModel = 'z-ai/glm-5.3-flash';
+      publicName = 'Pilote 1 Large';
+    } else if (modelId === 'mini') {
+      primaryNvidiaModel = 'meta/llama-3.2-11b-vision-instruct';
+      publicName = 'Pilote 1 Mini';
+    } else {
+      primaryNvidiaModel = 'meta/llama-3.2-11b-vision-instruct';
+      publicName = 'Pilote 1 Flash';
+    }
+
+    const CANDIDATE_MODELS = [
+      primaryNvidiaModel,
+      'meta/llama-3.2-11b-vision-instruct',
+      'z-ai/glm-5.3-flash',
+      'openai/gpt-oss-20b',
+      'deepseek-ai/deepseek-v4.1-flash',
+    ];
+    const MODELS_TO_TRY = [...new Set(CANDIDATE_MODELS)];
 
     const lastUserMsgRaw = messages[messages.length - 1]?.content || '';
     const lastUserMsgLower = lastUserMsgRaw.toLowerCase();
@@ -116,7 +139,30 @@ app.post('/api/chat', async (req, res) => {
     const detectedCity = detectCityInText(lastUserMsgRaw);
     const activeCityName = detectedCity ? detectedCity.name : (userLocation?.city || 'Paris');
 
-    let contextualSystemPrompt = SYSTEM_PROMPT;
+    let contextualSystemPrompt = `Tu es ${publicName}, un assistant personnel d'élite doté d'une interface ultra-élégante avec un design Apple minimaliste et fluide.
+Tu as accès à l'ensemble de Google Workspace (Gmail, Google Calendar, Google Tasks, Google Drive), à la géolocalisation et à l'API Google Maps officielle.
+Tu exécutes directement les requêtes de l'utilisateur : TU DIS DE FAIRE ET IL FAIT. Ne pose pas de questions inutiles, rédige et exécute immédiatement.
+
+RÈGLE ABSOLUE ET STRICTE D'IDENTITÉ :
+Tu es UNIQUEMENT et TOUJOURS "${publicName}". Si jamais on te demande quel modèle tu es ou qui tu es, réponds toujours fermement : "Je suis ${publicName}". Tu ne dois JAMAIS citer ni divulguer le nom d'un modèle d'IA sous-jacent.
+
+${thinkingEnabled ? `RÈGLE DE RÉFLEXION ACTIVÉE :
+L'utilisateur a activé le mode "Réflexion". Avant de rédiger ta réponse finale et tes actions, décris brièvement tes étapes d'analyse logique dans un bloc :
+<thinking>
+- Analyse du besoin...
+- Planification des actions Google Workspace ou Restaurants...
+- Vérification de cohérence...
+</thinking>
+Puis donne ta réponse finale claire et directe.` : ''}
+
+FORMATS STRUCTURÉS D'ACTION :
+1. Restaurants (avec carte interactive en direct) : bloc \`\`\`json:restaurants ... \`\`\`
+2. Envoi d'e-mail via Gmail : bloc \`\`\`json:email_action ... \`\`\`
+3. Rendez-vous Google Calendar : bloc \`\`\`json:appointment_action ... \`\`\`
+4. Google Tasks : bloc \`\`\`json:task_action ... \`\`\`
+5. Google Drive : bloc \`\`\`json:drive_action ... \`\`\`
+6. Tâches quotidiennes et récurrentes : bloc \`\`\`json:scheduled_task_action ... \`\`\``;
+
     if (userLocation || detectedCity) {
       contextualSystemPrompt += `\n\n[Information de localisation active] : Ville ciblée : ${activeCityName}.`;
       if (userLocation?.latitude && userLocation?.longitude) {
@@ -138,6 +184,7 @@ app.post('/api/chat', async (req, res) => {
     ];
 
     let replyContent = '';
+    let extractedThinking = '';
     let usedModel = '';
 
     // Multi-model resilience loop
@@ -174,15 +221,23 @@ app.post('/api/chat', async (req, res) => {
         const data = await response.json();
         const choice = data?.choices?.[0];
         const msg = choice?.message;
+
+        if (msg?.reasoning_content) {
+          extractedThinking = msg.reasoning_content;
+        }
+
         const candidate =
           msg?.content ||
-          msg?.reasoning_content ||
           msg?.reasoning ||
           choice?.delta?.content ||
           '';
 
         if (candidate && candidate.trim().length > 0) {
           replyContent = candidate;
+          usedModel = model;
+          break;
+        } else if (msg?.reasoning_content && !replyContent) {
+          replyContent = msg.reasoning_content;
           usedModel = model;
           break;
         }
@@ -192,7 +247,16 @@ app.post('/api/chat', async (req, res) => {
     }
 
     if (!replyContent) {
-      replyContent = 'Je suis à votre écoute.';
+      replyContent = `Je suis à votre écoute en tant que ${publicName}.`;
+    }
+
+    // Check for inline <thinking> tags in output if requested
+    if (replyContent.includes('<thinking>')) {
+      const thinkMatch = replyContent.match(/<thinking>([\s\S]*?)<\/thinking>/i);
+      if (thinkMatch) {
+        extractedThinking = thinkMatch[1].trim();
+        replyContent = replyContent.replace(thinkMatch[0], '').trim();
+      }
     }
 
     // ==============================================================
@@ -276,7 +340,8 @@ app.post('/api/chat', async (req, res) => {
 
     return res.json({
       content: replyContent,
-      model: 'Pilote 1',
+      thinking: extractedThinking || undefined,
+      model: publicName,
       provider: 'NVIDIA NIM',
       backendModel: usedModel,
     });

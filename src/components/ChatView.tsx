@@ -14,9 +14,12 @@ import {
   Plus,
   CheckSquare,
   Repeat,
-  ArrowUp
+  ArrowUp,
+  Brain,
+  Lightbulb,
+  ChevronDown
 } from 'lucide-react';
-import { Message, Attachment, UserLocation, Restaurant, EmailAction, AppointmentAction } from '../types';
+import { Message, Attachment, UserLocation, Restaurant, EmailAction, AppointmentAction, PiloteModelId } from '../types';
 import { RestaurantMapCard } from './RestaurantMapCard';
 import { 
   EmailActionCard, 
@@ -36,6 +39,9 @@ interface ChatViewProps {
   onScheduleAppointment: (action: AppointmentAction) => void;
   onSendEmailAction: (action: EmailAction) => void;
   onOpenTasksModal?: () => void;
+  thinkingEnabled: boolean;
+  onToggleThinking: () => void;
+  selectedModelId?: PiloteModelId;
 }
 
 const SUGGESTED_PROMPTS = [
@@ -80,11 +86,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onScheduleAppointment,
   onSendEmailAction,
   onOpenTasksModal,
+  thinkingEnabled,
+  onToggleThinking,
+  selectedModelId = 'flash',
 }) => {
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [fileLimitWarning, setFileLimitWarning] = useState<string | null>(null);
   const [isActionSheetOpen, setIsActionSheetOpen] = useState(false);
+  const [expandedThinkingIds, setExpandedThinkingIds] = useState<Record<string, boolean>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -281,6 +291,47 @@ export const ChatView: React.FC<ChatViewProps> = ({
                             <span className="opacity-75 text-[10px]">({formatFileSize(att.size)})</span>
                           </div>
                         ))}
+                      </div>
+                    )}
+
+                    {/* Collapsible Thinking Block (Mode Réflexion) */}
+                    {!isUser && message.thinking && (
+                      <div className="mb-2.5 rounded-xl border border-indigo-200/70 bg-indigo-50/50 overflow-hidden text-xs">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setExpandedThinkingIds(prev => ({
+                              ...prev,
+                              [message.id]: !prev[message.id],
+                            }));
+                          }}
+                          className="w-full px-3 py-1.5 flex items-center justify-between text-indigo-900 font-semibold hover:bg-indigo-100/50 transition-colors cursor-pointer"
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <Brain className="w-3.5 h-3.5 text-indigo-600 animate-pulse" />
+                            <span>Processus de réflexion</span>
+                            {message.modelUsed && (
+                              <span className="text-[10px] font-normal text-indigo-600/80 bg-indigo-100 px-1.5 py-0.2 rounded-full">
+                                {message.modelUsed}
+                              </span>
+                            )}
+                          </div>
+                          <ChevronDown className={`w-3.5 h-3.5 text-indigo-500 transition-transform duration-200 ${
+                            expandedThinkingIds[message.id] ? 'rotate-180' : ''
+                          }`} />
+                        </button>
+                        <AnimatePresence>
+                          {expandedThinkingIds[message.id] && (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: 'auto', opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              className="px-3 pb-2.5 pt-1 text-[11px] text-slate-700 leading-relaxed border-t border-indigo-200/50 bg-white/60 font-mono whitespace-pre-wrap"
+                            >
+                              {message.thinking}
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
                       </div>
                     )}
 
@@ -516,6 +567,25 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 className="w-full py-2 px-1 text-xs sm:text-sm bg-transparent text-slate-900 placeholder:text-slate-400 focus:outline-hidden resize-none max-h-28 overflow-y-auto"
               />
             </div>
+
+            {/* Mode Réflexion Toggle Button */}
+            <motion.button
+              whileTap={{ scale: 0.92 }}
+              type="button"
+              onClick={onToggleThinking}
+              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer shrink-0 border ${
+                thinkingEnabled
+                  ? 'bg-linear-to-r from-indigo-600 to-purple-600 text-white border-indigo-400 shadow-[0_2px_12px_rgba(99,102,241,0.35)]'
+                  : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200/80'
+              }`}
+              title={thinkingEnabled ? "Mode Réflexion activé : Pilote 1 détaille ses étapes logiques" : "Activer le mode Réflexion approfondie"}
+            >
+              <Brain className={`w-3.5 h-3.5 ${thinkingEnabled ? 'text-amber-300 animate-pulse' : 'text-slate-500'}`} />
+              <span className="hidden sm:inline font-semibold">Réflexion</span>
+              {thinkingEnabled && (
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+              )}
+            </motion.button>
 
             {/* Apple Blue Circular Send Arrow Button */}
             <motion.button

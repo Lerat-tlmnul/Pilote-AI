@@ -89,11 +89,15 @@ export interface ScheduledTaskAction {
   status: 'created';
 }
 
+export type PiloteModelId = 'flash' | 'mini' | 'large';
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
+  thinking?: string;
+  modelUsed?: string;
   attachments?: Attachment[];
   restaurants?: Restaurant[];
   emailAction?: EmailAction;

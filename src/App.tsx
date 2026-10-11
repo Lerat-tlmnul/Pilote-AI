@@ -20,7 +20,8 @@ import {
   ScheduledTask,
   GoogleUser,
   UserProfileData,
-  MemoryItem
+  MemoryItem,
+  PiloteModelId
 } from './types';
 import { 
   initAuthListener, 
@@ -61,6 +62,10 @@ export default function App() {
   const [googleUser, setGoogleUser] = useState<GoogleUser | null>(null);
   const [isConnectingGoogle, setIsConnectingGoogle] = useState(false);
   const [isExecutingScheduledTask, setIsExecutingScheduledTask] = useState(false);
+
+  // Model selection (Pilote 1 Flash / Mini / Large) and Thinking Mode
+  const [selectedModelId, setSelectedModelId] = useState<PiloteModelId>('flash');
+  const [thinkingEnabled, setThinkingEnabled] = useState<boolean>(false);
 
   // Persistent User Profile State (Conversations + Memory + Scheduled Tasks)
   const [profile, setProfile] = useState<UserProfileData>(() => loadProfileData('guest'));
@@ -304,7 +309,14 @@ export default function App() {
 
     try {
       // Execute robust multi-layered AI completion service (Dev, Server, Direct & Fallback)
-      const aiResult = await sendChatMessage(newMessages, profile, userLocation, googleUser);
+      const aiResult = await sendChatMessage(
+        newMessages, 
+        profile, 
+        userLocation, 
+        googleUser,
+        selectedModelId,
+        thinkingEnabled
+      );
 
       // Auto create task in state if returned
       if (aiResult.scheduledTaskAction) {
@@ -326,6 +338,8 @@ export default function App() {
         role: 'assistant',
         content: aiResult.cleanText || "Je reste à votre entière disposition.",
         timestamp: Date.now(),
+        thinking: aiResult.thinking,
+        modelUsed: aiResult.modelUsed || (selectedModelId === 'large' ? 'Pilote 1 Large' : selectedModelId === 'mini' ? 'Pilote 1 Mini' : 'Pilote 1 Flash'),
         restaurants: aiResult.restaurants,
         emailAction: aiResult.emailAction,
         appointmentAction: aiResult.appointmentAction,
@@ -425,6 +439,8 @@ export default function App() {
         onOpenImportantModal={() => setIsImportantModalOpen(true)}
         onOpenTasksModal={() => setIsTasksModalOpen(true)}
         scheduledTasksCount={profile.scheduledTasks?.length || 0}
+        selectedModelId={selectedModelId}
+        onSelectModelId={(model) => setSelectedModelId(model)}
       />
 
       {/* Main View Area */}
@@ -437,6 +453,9 @@ export default function App() {
             userLocation={userLocation}
             onRequestLocation={requestLocation}
             onOpenTasksModal={() => setIsTasksModalOpen(true)}
+            thinkingEnabled={thinkingEnabled}
+            onToggleThinking={() => setThinkingEnabled((prev) => !prev)}
+            selectedModelId={selectedModelId}
             onScheduleAppointment={(action) => {
               const confirmationMsg: Message = {
                 id: `msg-${Date.now()}-confirm`,

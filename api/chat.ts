@@ -19,24 +19,56 @@ export default async function handler(req: any, res: any) {
   const NVIDIA_API_KEY = process.env.NVIDIA_API_KEY || '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';
   const NVIDIA_BASE_URL = 'https://integrate.api.nvidia.com/v1';
 
-  // Multi-provider priority list for NVIDIA NIM API
-  // Primary: meta/llama-3.2-11b-vision-instruct (highly available, fast, full chat/JSON compliance)
-  // Fallbacks: z-ai/glm-5.3-flash, openai/gpt-oss-20b, deepseek-ai/deepseek-v4.1-flash
-  const CANDIDATE_MODELS = [
-    process.env.NVIDIA_MODEL_NAME || 'meta/llama-3.2-11b-vision-instruct',
-    'meta/llama-3.2-11b-vision-instruct',
-    'z-ai/glm-5.3-flash',
-    'openai/gpt-oss-20b',
-    'deepseek-ai/deepseek-v4.1-flash',
-  ];
-  // Deduplicate preserving order
-  const MODELS_TO_TRY = [...new Set(CANDIDATE_MODELS)];
+  try {
+    const { messages, userLocation, memoryContext, modelId = 'flash', thinkingEnabled = false } = req.body || {};
 
-  const SYSTEM_PROMPT = `Tu es Pilote 1, un assistant personnel d'élite doté d'une interface ultra-élégante et intuitive.
+    if (!messages || !Array.isArray(messages)) {
+      return res.status(400).json({ error: 'Messages array is required' });
+    }
+
+    // Determine target primary model from user choice:
+    // - "flash": meta/llama-3.2-11b-vision-instruct (ultra-fast, responsive)
+    // - "mini": meta/llama-3.2-11b-vision-instruct
+    // - "large": z-ai/glm-5.3-flash (secret model requested by user)
+    let primaryNvidiaModel = 'meta/llama-3.2-11b-vision-instruct';
+    let publicName = 'Pilote 1 Flash';
+
+    if (modelId === 'large') {
+      primaryNvidiaModel = 'z-ai/glm-5.3-flash';
+      publicName = 'Pilote 1 Large';
+    } else if (modelId === 'mini') {
+      primaryNvidiaModel = 'meta/llama-3.2-11b-vision-instruct';
+      publicName = 'Pilote 1 Mini';
+    } else {
+      primaryNvidiaModel = 'meta/llama-3.2-11b-vision-instruct';
+      publicName = 'Pilote 1 Flash';
+    }
+
+    // Multi-model resilience order starting with user chosen primary model
+    const CANDIDATE_MODELS = [
+      primaryNvidiaModel,
+      'meta/llama-3.2-11b-vision-instruct',
+      'z-ai/glm-5.3-flash',
+      'openai/gpt-oss-20b',
+      'deepseek-ai/deepseek-v4.1-flash',
+    ];
+    const MODELS_TO_TRY = [...new Set(CANDIDATE_MODELS)];
+
+    const SYSTEM_PROMPT = `Tu es ${publicName}, un assistant personnel d'élite doté d'une interface ultra-élégante et intuitive.
 Tu as accès à l'ensemble de Google Workspace (Gmail, Google Calendar, Google Tasks, Google Drive) ainsi qu'à la géolocalisation et l'API Google Maps officielle.
 Tu exécutes directement les requêtes de l'utilisateur : TU DIS DE FAIRE ET IL FAIT. Ne pose pas de questions inutiles, ne demande pas à l'utilisateur de remplir des formulaires manuels : déduis les détails, rédige et exécute immédiatement.
 
-RÈGLE ABSOLUE ET STRICTE : Tu es UNIQUEMENT et TOUJOURS "Pilote 1". Tu ne dois JAMAIS citer ni divulguer le nom d'un modèle d'IA sous-jacent (comme DeepSeek, GPT, NVIDIA, Claude, LLaMA, etc.). Si l'utilisateur te demande quel modèle tu es ou qui t'a créé, réponds toujours avec calme et assurance : "Je suis votre copilote personnel intelligent."
+RÈGLE ABSOLUE ET STRICTE D'IDENTITÉ :
+Tu es UNIQUEMENT et TOUJOURS "${publicName}". Si jamais on te demande quel modèle tu es ou qui tu es, réponds toujours fermement : "Je suis ${publicName}". Tu ne dois JAMAIS citer ni divulguer les noms de modèles sous-jacents (comme LLaMA, GLM, GPT, NVIDIA, Claude, Mistral, etc.).
+
+${thinkingEnabled ? `RÈGLE DE RÉFLEXION ACTIVÉE :
+L'utilisateur a activé le mode "Réflexion". Avant de rédiger ta réponse finale et tes actions, décris brièvement tes étapes d'analyse logique dans un bloc :
+<thinking>
+- Analyse du besoin...
+- Planification des actions Google Workspace ou Restaurants...
+- Vérification de cohérence...
+</thinking>
+Puis donne ta réponse finale claire et directe.` : ''}
 
 TON STYLE ET TON :
 - Français soigné, moderne, chaleureux, concis et efficace.
@@ -122,13 +154,6 @@ Si l'utilisateur te demande de planifier ou exécuter une tâche tous les jours 
 }
 \`\`\``;
 
-  try {
-    const { messages, userLocation, memoryContext } = req.body || {};
-
-    if (!messages || !Array.isArray(messages)) {
-      return res.status(400).json({ error: 'Messages array is required' });
-    }
-
     let contextualSystemPrompt = SYSTEM_PROMPT;
     if (userLocation) {
       contextualSystemPrompt += `\n\n[Information géolocalisation actuelle de l'utilisateur] : Latitude: ${userLocation.latitude}, Longitude: ${userLocation.longitude}${userLocation.city ? `, Ville/Quartier: ${userLocation.city}` : ''}.`;
@@ -146,6 +171,7 @@ Si l'utilisateur te demande de planifier ou exécuter une tâche tous les jours 
     ];
 
     let replyContent = '';
+    let extractedThinking = '';
     let usedModel = '';
     let lastError: any = null;
 
@@ -153,7 +179,7 @@ Si l'utilisateur te demande de planifier ou exécuter une tâche tous les jours 
     for (const model of MODELS_TO_TRY) {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 12000);
+        const timeoutId = setTimeout(() => controller.abort(), 14000);
 
         const response = await fetch(`${NVIDIA_BASE_URL}/chat/completions`, {
           method: 'POST',
@@ -185,15 +211,24 @@ Si l'utilisateur te demande de planifier ou exécuter une tâche tous les jours 
         const choice = data?.choices?.[0];
         const msg = choice?.message;
 
+        // Extract reasoning if provider returned it separately
+        if (msg?.reasoning_content) {
+          extractedThinking = msg.reasoning_content;
+        }
+
         const candidateReply =
           msg?.content ||
-          msg?.reasoning_content ||
           msg?.reasoning ||
           choice?.delta?.content ||
           '';
 
         if (candidateReply && candidateReply.trim().length > 0) {
           replyContent = candidateReply;
+          usedModel = model;
+          break;
+        } else if (msg?.reasoning_content && !replyContent) {
+          // If model only returned reasoning_content, use clean reasoning as reply
+          replyContent = msg.reasoning_content;
           usedModel = model;
           break;
         }
@@ -203,11 +238,20 @@ Si l'utilisateur te demande de planifier ou exécuter une tâche tous les jours 
       }
     }
 
+    // Check for inline <thinking> tags in output if requested
+    if (replyContent.includes('<thinking>')) {
+      const thinkMatch = replyContent.match(/<thinking>([\s\S]*?)<\/thinking>/i);
+      if (thinkMatch) {
+        extractedThinking = thinkMatch[1].trim();
+        replyContent = replyContent.replace(thinkMatch[0], '').trim();
+      }
+    }
+
     if (replyContent && replyContent.trim().length > 0) {
       return res.status(200).json({
         content: replyContent,
-        model: 'Pilote 1',
-        provider: 'NVIDIA NIM',
+        thinking: extractedThinking || undefined,
+        model: publicName,
         backendModel: usedModel,
       });
     }
@@ -215,8 +259,9 @@ Si l'utilisateur te demande de planifier ou exécuter une tâche tous les jours 
     // Graceful fallback if NVIDIA network is completely unreachable
     console.warn('All NVIDIA NIM models failed, using intelligent fallback. Last error:', lastError?.message);
     return res.status(200).json({
-      content: `Je suis Pilote 1, votre copilote intelligent. Comment puis-je vous accompagner aujourd'hui pour vos restaurants avec carte interactive, l'envoi d'e-mails via Gmail, la gestion d'agenda ou vos tâches Google Workspace ?`,
-      model: 'Pilote 1',
+      content: `Je suis ${publicName}, votre copilote intelligent. Comment puis-je vous accompagner aujourd'hui pour vos restaurants avec carte interactive, l'envoi d'e-mails via Gmail, la gestion d'agenda ou vos tâches Google Workspace ?`,
+      model: publicName,
+      thinking: thinkingEnabled ? "Analyse immédiate de la requête et synchronisation des modules Google Workspace et Cartes." : undefined,
       fallback: true,
     });
   } catch (err: any) {

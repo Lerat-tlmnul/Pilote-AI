@@ -17,7 +17,7 @@ import {
   Globe
 } from 'lucide-react';
 import { Restaurant } from '../types';
-import { detectCityInText, getRestaurantsForCity } from '../lib/cityRestaurants';
+import { detectCityInText, getRestaurantsForCity, searchCityAndRestaurants } from '../lib/cityRestaurants';
 import { GoogleMapView } from './GoogleMapView';
 import bistroImagePath from '../assets/images/restaurant_bistrot_interior_1791388341325.jpg';
 import terraceImagePath from '../assets/images/restaurant_terrasse_view_1791388352954.jpg';
@@ -138,23 +138,24 @@ export const RestaurantMapCard: React.FC<RestaurantMapCardProps> = ({
     };
   }, []);
 
-  // Handle city search from the map header
-  const handleCitySearch = (e: React.FormEvent) => {
+  // Handle city search from the map header with worldwide geocoding
+  const [isSearchingCity, setIsSearchingCity] = useState(false);
+
+  const handleCitySearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!searchCityInput.trim()) return;
 
-    const found = detectCityInText(searchCityInput);
-    if (found) {
-      setCurrentCityName(found.name);
-      setRestaurantsList(found.restaurants);
-      setSelectedIndex(0);
-      setSearchCityInput('');
-    } else {
-      const res = getRestaurantsForCity(searchCityInput.trim());
-      setCurrentCityName(res.city);
+    setIsSearchingCity(true);
+    try {
+      const res = await searchCityAndRestaurants(searchCityInput.trim());
+      setCurrentCityName(res.name);
       setRestaurantsList(res.restaurants);
       setSelectedIndex(0);
       setSearchCityInput('');
+    } catch (err) {
+      console.warn('City search failed:', err);
+    } finally {
+      setIsSearchingCity(false);
     }
   };
 
@@ -224,9 +225,17 @@ export const RestaurantMapCard: React.FC<RestaurantMapCardProps> = ({
             </div>
             <button
               type="submit"
-              className="px-2.5 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-white text-xs font-medium transition-colors cursor-pointer"
+              disabled={isSearchingCity}
+              className="px-2.5 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-white text-xs font-medium transition-colors cursor-pointer flex items-center gap-1"
             >
-              Chercher
+              {isSearchingCity ? (
+                <>
+                  <Compass className="w-3 h-3 animate-spin" />
+                  <span>Recherche...</span>
+                </>
+              ) : (
+                <span>Chercher</span>
+              )}
             </button>
           </form>
 

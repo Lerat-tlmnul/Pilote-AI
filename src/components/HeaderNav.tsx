@@ -16,9 +16,14 @@ import {
   Mail,
   Calendar,
   Layers,
-  Check
+  Check,
+  Zap,
+  Cpu,
+  Flame,
+  Lightbulb,
+  ChevronRight
 } from 'lucide-react';
-import { UserLocation, GoogleUser } from '../types';
+import { UserLocation, GoogleUser, PiloteModelId } from '../types';
 
 interface HeaderNavProps {
   currentTab: 'chat' | 'projects';
@@ -37,6 +42,8 @@ interface HeaderNavProps {
   onOpenImportantModal: () => void;
   onOpenTasksModal: () => void;
   scheduledTasksCount?: number;
+  selectedModelId: PiloteModelId;
+  onSelectModelId: (model: PiloteModelId) => void;
 }
 
 const LOGO_URL = "https://cdn.fbsbx.com/v/t65.102178-21/841369064_1700174318342564_3271721217476734999_n.jpg/pilote_4k_transparent.png?_nc_ht=cdn.fbsbx.com&_nc_ohc=odcyhxgaYC8Q7kNvwF6bcWV&sdl=0&ccb=14-4&oh=00_AQPGkUgJrahia3JJDnDRKdVEg8rkTFmoALNTHwdL52ZTrg&oe=6AEDA667&_nc_sid=4ee932";
@@ -58,9 +65,33 @@ export const HeaderNav: React.FC<HeaderNavProps> = ({
   onOpenImportantModal,
   onOpenTasksModal,
   scheduledTasksCount = 0,
+  selectedModelId = 'flash',
+  onSelectModelId,
 }) => {
   const [logoError, setLogoError] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
+
+  const AVAILABLE_MODELS: { id: PiloteModelId; name: string; tag: string; desc: string; icon: any; color: string }[] = [
+    {
+      id: 'flash',
+      name: 'Pilote 1 Flash',
+      tag: 'Ultra-rapide',
+      desc: 'Réactivité instantanée, exécution Google Workspace & Restaurants',
+      icon: Zap,
+      color: 'text-slate-900 bg-slate-100 border-slate-200',
+    },
+    {
+      id: 'large',
+      name: 'Pilote 1 Large',
+      tag: 'Puissance Max',
+      desc: 'Raisonnement complexe, synthèse de dossiers et grands projets',
+      icon: Flame,
+      color: 'text-slate-900 bg-slate-100 border-slate-200',
+    },
+  ];
+
+  const currentModel = AVAILABLE_MODELS.find(m => m.id === selectedModelId) || AVAILABLE_MODELS[0];
 
   const navItems = [
     { id: 'chat' as const, label: 'Pilote', icon: MessageSquare },
@@ -101,6 +132,80 @@ export const HeaderNav: React.FC<HeaderNavProps> = ({
                 </div>
               )}
             </motion.div>
+
+            {/* Apple iOS Model Selector Dropdown (Haut à gauche) */}
+            <div className="relative">
+              <motion.button
+                whileTap={{ scale: 0.94 }}
+                type="button"
+                onClick={() => setIsModelMenuOpen(!isModelMenuOpen)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-bold transition-all cursor-pointer shadow-2xs ${currentModel.color}`}
+                title="Choisir le modèle Pilote"
+              >
+                <currentModel.icon className="w-3.5 h-3.5" />
+                <span className="font-bold">{currentModel.name}</span>
+                <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${isModelMenuOpen ? 'rotate-180' : ''}`} />
+              </motion.button>
+
+              <AnimatePresence>
+                {isModelMenuOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 8, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 6, scale: 0.95 }}
+                    transition={{ type: 'spring', stiffness: 450, damping: 30 }}
+                    className="absolute left-0 mt-2 w-72 rounded-2xl bg-white/95 backdrop-blur-2xl p-2 shadow-2xl border border-white/80 z-50 text-xs"
+                  >
+                    <div className="px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500 border-b border-slate-100 flex items-center justify-between">
+                      <span>Modèles Pilote 1</span>
+                      <span className="text-slate-400 font-normal">NVIDIA NIM</span>
+                    </div>
+
+                    <div className="mt-1 space-y-1">
+                      {AVAILABLE_MODELS.map((m) => {
+                        const Icon = m.icon;
+                        const isSelected = m.id === selectedModelId;
+                        return (
+                          <button
+                            key={m.id}
+                            type="button"
+                            onClick={() => {
+                              onSelectModelId(m.id);
+                              setIsModelMenuOpen(false);
+                            }}
+                            className={`w-full text-left p-2.5 rounded-xl transition-all cursor-pointer flex items-start gap-2.5 ${
+                              isSelected ? 'bg-slate-900 text-white shadow-xs' : 'hover:bg-slate-100 text-slate-800'
+                            }`}
+                          >
+                            <div className={`p-1.5 rounded-lg shrink-0 mt-0.5 ${isSelected ? 'bg-white/20 text-white' : m.color}`}>
+                              <Icon className="w-4 h-4" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between">
+                                <span className="font-bold text-xs">{m.name}</span>
+                                <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold ${
+                                  isSelected ? 'bg-white/20 text-white' : 'bg-slate-200/80 text-slate-600'
+                                }`}>
+                                  {m.tag}
+                                </span>
+                              </div>
+                              <p className={`text-[10px] mt-0.5 leading-snug line-clamp-2 ${
+                                isSelected ? 'text-white/80' : 'text-slate-500'
+                              }`}>
+                                {m.desc}
+                              </p>
+                            </div>
+                            {isSelected && (
+                              <Check className="w-4 h-4 text-sky-400 shrink-0 self-center" />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
 
             {/* iOS History Pill */}
             <motion.button
@@ -302,35 +407,88 @@ export const HeaderNav: React.FC<HeaderNavProps> = ({
       </header>
 
       {/* ============================================================ */}
-      {/* MOBILE TOP BAR (Apple iOS Dynamic Island Glass Capsule)      */}
+      {/* MOBILE TOP BAR (Clean Minimalist Monochrome Style)           */}
       {/* ============================================================ */}
-      <div className="md:hidden fixed top-0 left-0 right-0 z-30 pt-safe px-3 py-2 bg-white/75 backdrop-blur-2xl border-b border-white/60 shadow-[0_4px_20px_rgba(0,0,0,0.03)] flex items-center justify-between">
+      <div className="md:hidden fixed top-0 left-0 right-0 z-30 pt-safe px-3 py-2 bg-slate-900 text-white border-b border-slate-800 shadow-sm flex items-center justify-between">
         {/* Left: History Drawer & Logo */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 relative">
           <button
             type="button"
             onClick={onOpenDrawer}
-            className="w-8 h-8 rounded-full bg-black/5 active:bg-black/10 flex items-center justify-center text-slate-800 transition-colors"
+            className="w-8 h-8 rounded-lg bg-slate-800 active:bg-slate-700 flex items-center justify-center text-slate-200 transition-colors cursor-pointer"
             title="Historique"
           >
-            <History className="w-4 h-4 text-slate-700" />
+            <History className="w-4 h-4 text-slate-200" />
           </button>
 
-          <div onClick={() => onSelectTab('chat')} className="flex items-center">
+          <div onClick={() => onSelectTab('chat')} className="flex items-center cursor-pointer">
             {!logoError ? (
               <img
                 src={LOGO_URL}
                 alt="Logo"
                 referrerPolicy="no-referrer"
                 onError={() => setLogoError(true)}
-                className="h-7 w-auto max-w-[90px] object-contain drop-shadow-2xs"
+                className="h-6 w-auto max-w-[70px] object-contain filter invert"
               />
             ) : (
-              <div className="w-7 h-7 rounded-full bg-sky-500 text-white font-bold text-xs flex items-center justify-center shadow-2xs">
+              <div className="w-7 h-7 rounded-lg bg-slate-700 text-white font-bold text-xs flex items-center justify-center">
                 P
               </div>
             )}
           </div>
+
+          {/* Mobile Model Selector Button */}
+          <button
+            type="button"
+            onClick={() => setIsModelMenuOpen(!isModelMenuOpen)}
+            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 text-slate-200 border border-slate-700 text-[11px] font-semibold active:scale-95 transition-all cursor-pointer"
+          >
+            <currentModel.icon className="w-3.5 h-3.5 text-slate-300" />
+            <span className="truncate max-w-[85px]">{currentModel.name.replace('Pilote 1 ', '')}</span>
+            <ChevronDown className={`w-2.5 h-2.5 transition-transform ${isModelMenuOpen ? 'rotate-180' : ''}`} />
+          </button>
+
+          {/* Mobile Model Selection Popup Menu */}
+          <AnimatePresence>
+            {isModelMenuOpen && (
+              <motion.div
+                initial={{ opacity: 0, y: 8, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 6, scale: 0.95 }}
+                className="absolute left-0 top-12 w-64 rounded-xl bg-slate-900 border border-slate-700 p-2 shadow-2xl z-50 text-xs text-white"
+              >
+                <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-800 flex items-center justify-between">
+                  <span>Modèle Pilote</span>
+                  <span>NVIDIA NIM</span>
+                </div>
+                <div className="mt-1.5 space-y-1">
+                  {AVAILABLE_MODELS.map((m) => {
+                    const Icon = m.icon;
+                    const isSelected = m.id === selectedModelId;
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => {
+                          onSelectModelId(m.id);
+                          setIsModelMenuOpen(false);
+                        }}
+                        className={`w-full text-left p-2 rounded-lg transition-all cursor-pointer flex items-center justify-between ${
+                          isSelected ? 'bg-white text-slate-900 font-bold' : 'hover:bg-slate-800 text-slate-200'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <Icon className="w-4 h-4" />
+                          <span>{m.name}</span>
+                        </div>
+                        {isSelected && <Check className="w-3.5 h-3.5 text-slate-900" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
         {/* Center: Dynamic Location / Active Status Capsule */}

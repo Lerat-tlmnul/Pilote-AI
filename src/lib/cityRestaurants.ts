@@ -493,3 +493,102 @@ export function getRestaurantsForCity(cityName?: string, lat?: number, lng?: num
     restaurants: CITIES_DATA.paris.restaurants,
   };
 }
+
+/**
+ * Searches and geocodes any city worldwide via OpenStreetMap/Nominatim or local catalog,
+ * positioning the Google Maps viewport and creating localized restaurants for that exact city.
+ */
+export async function searchCityAndRestaurants(query: string): Promise<CityData> {
+  const clean = query.trim();
+  if (!clean) {
+    const defaultData = getRestaurantsForCity('Paris');
+    return {
+      name: defaultData.city,
+      lat: defaultData.lat,
+      lng: defaultData.lng,
+      restaurants: defaultData.restaurants,
+    };
+  }
+
+  // 1. Try local catalog first (instant)
+  const localMatch = detectCityInText(clean);
+  if (localMatch) {
+    return localMatch;
+  }
+
+  // 2. Geocode city dynamically using Nominatim
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(clean)}&format=json&addressdetails=1&limit=1`,
+      {
+        headers: {
+          'Accept': 'application/json',
+        },
+      }
+    );
+
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        const place = data[0];
+        const lat = parseFloat(place.lat);
+        const lng = parseFloat(place.lon);
+        const cityName = place.address?.city || place.address?.town || place.address?.village || place.name || clean;
+
+        if (!isNaN(lat) && !isNaN(lng)) {
+          return {
+            name: cityName,
+            lat,
+            lng,
+            restaurants: [
+              {
+                name: `Le Bistrot de ${cityName}`,
+                cuisine: 'Bistronomie & Cuisine du Marché',
+                address: `Centre-ville, ${cityName}`,
+                rating: 4.8,
+                priceRange: '€€€',
+                description: `Cuisine inventive et produits de terroir au cœur de ${cityName}. Ambiance feutrée et soignée.`,
+                highlight: 'Plat de saison du marché & sélection de vins de vignerons',
+                lat: lat + 0.0018,
+                lng: lng + 0.0022,
+              },
+              {
+                name: `La Table Gourmande de ${cityName}`,
+                cuisine: 'Gastronomie Régionale',
+                address: `Place Centrale, ${cityName}`,
+                rating: 4.9,
+                priceRange: '€€€€',
+                description: `Adresse d'exception à ${cityName}, terrasse ombragée et service attentionné.`,
+                highlight: 'Menu dégustation signature & spécialités régionales',
+                lat: lat - 0.0021,
+                lng: lng - 0.0019,
+              },
+              {
+                name: `L'Atelier des Saveurs`,
+                cuisine: 'Cuisine Contemporaine & Vins Vivants',
+                address: `Quartier Historique, ${cityName}`,
+                rating: 4.7,
+                priceRange: '€€',
+                description: `Cadre moderne et convivial, assiettes à partager et carte rythmée par les saisons.`,
+                highlight: 'Risotto onctueux & dessert croustillant au chocolat',
+                lat: lat + 0.0032,
+                lng: lng - 0.0028,
+              },
+            ],
+          };
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Geocoding error for city query:', err);
+  }
+
+  // Fallback to standard resolver
+  const fallback = getRestaurantsForCity(clean);
+  return {
+    name: fallback.city,
+    lat: fallback.lat,
+    lng: fallback.lng,
+    restaurants: fallback.restaurants,
+  };
+}
