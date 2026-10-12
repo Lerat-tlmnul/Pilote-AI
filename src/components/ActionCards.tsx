@@ -15,9 +15,14 @@ import {
   FileText,
   Repeat,
   ListTodo,
-  FolderSync
+  FolderSync,
+  CreditCard,
+  AlertTriangle,
+  ShoppingBag,
+  Utensils,
+  Train
 } from 'lucide-react';
-import { EmailAction, AppointmentAction, GoogleTaskAction, GoogleDriveAction, ScheduledTaskAction } from '../types';
+import { EmailAction, AppointmentAction, GoogleTaskAction, GoogleDriveAction, ScheduledTaskAction, AutonomousOrderAction } from '../types';
 import { 
   sendRealGmail, 
   scheduleRealCalendarEvent, 
@@ -554,6 +559,210 @@ export const ScheduledTaskActionCard: React.FC<ScheduledActionCardProps> = ({
             className="px-3 py-1.5 rounded-xl bg-slate-900 text-white font-semibold hover:bg-slate-800 transition-colors cursor-pointer"
           >
             Gérer les tâches
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
+
+interface AutonomousOrderCardProps {
+  action: AutonomousOrderAction;
+  onConfirmOrder?: (action: AutonomousOrderAction) => void;
+  onCancelOrder?: (action: AutonomousOrderAction) => void;
+  onOpenPaymentModal?: () => void;
+}
+
+export const AutonomousOrderActionCard: React.FC<AutonomousOrderCardProps> = ({
+  action,
+  onConfirmOrder,
+  onCancelOrder,
+  onOpenPaymentModal,
+}) => {
+  const [status, setStatus] = useState<'pending_approval' | 'confirmed' | 'cancelled'>(action.status || 'pending_approval');
+  const [cancelCountdown, setCancelCountdown] = useState<number | null>(status === 'confirmed' ? 30 : null);
+
+  useEffect(() => {
+    if (cancelCountdown !== null && cancelCountdown > 0) {
+      const timer = setTimeout(() => setCancelCountdown(cancelCountdown - 1), 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [cancelCountdown]);
+
+  const handleConfirm = () => {
+    setStatus('confirmed');
+    setCancelCountdown(30);
+    if (onConfirmOrder) onConfirmOrder({ ...action, status: 'confirmed' });
+  };
+
+  const handleCancel = () => {
+    setStatus('cancelled');
+    setCancelCountdown(null);
+    if (onCancelOrder) onCancelOrder({ ...action, status: 'cancelled' });
+  };
+
+  const getServiceIcon = () => {
+    const s = (action.service || '').toLowerCase();
+    if (s.includes('sncf') || s.includes('train')) return Train;
+    if (s.includes('uber') || s.includes('deliveroo') || s.includes('repas')) return Utensils;
+    return ShoppingBag;
+  };
+
+  const ServiceIcon = getServiceIcon();
+
+  return (
+    <div className="mt-3.5 rounded-3xl bg-white/95 border border-white/90 shadow-md backdrop-blur-xl p-4 sm:p-5 transition-all text-xs">
+      {/* Top Banner */}
+      <div className="flex items-center justify-between pb-3 border-b border-slate-100 flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 rounded-xl bg-slate-900 text-white flex items-center justify-center shrink-0 shadow-xs">
+            <ServiceIcon className="w-4 h-4 text-amber-300" />
+          </div>
+          <div>
+            <div className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+              <span>{action.service || 'Marchand Partenaire'}</span>
+              <span className="text-[10px] text-slate-400">·</span>
+              <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">{action.category || 'Commande'}</span>
+            </div>
+            <div className="text-[10px] text-slate-500">
+              Délégation de commande Pilote 1
+            </div>
+          </div>
+        </div>
+
+        {/* Status Badge */}
+        {status === 'confirmed' && (
+          <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-emerald-800 text-[11px] font-bold">
+            <Check className="w-3.5 h-3.5 text-emerald-600" />
+            <span>Débit autorisé & Confirmé</span>
+          </div>
+        )}
+        {status === 'pending_approval' && (
+          <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/25 text-amber-900 text-[11px] font-bold">
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+            <span>En attente de votre accord</span>
+          </div>
+        )}
+        {status === 'cancelled' && (
+          <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-rose-500/10 border border-rose-500/25 text-rose-800 text-[11px] font-bold">
+            <span>Commande annulée</span>
+          </div>
+        )}
+      </div>
+
+      {/* Financial Safety Alert Banner */}
+      <div className="mt-3 p-3 rounded-2xl bg-rose-50/90 border border-rose-200 text-rose-950 flex items-start gap-2.5">
+        <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+        <div className="space-y-0.5 text-[11px] leading-relaxed">
+          <span className="font-extrabold uppercase tracking-wide text-rose-900 block">
+            ⚠️ Attention — Débit Réel sur Moyen de Paiement
+          </span>
+          <p className="text-rose-900 font-medium">
+            {status === 'confirmed'
+              ? `Votre carte bancaire (Visa •••• ${action.cardLast4 || '4242'}) a été autorisée pour un montant de ${action.amount.toFixed(2)} ${action.currency || '€'}.`
+              : `Cette action entraînera un débit financier réel de ${action.amount.toFixed(2)} ${action.currency || '€'} sur votre carte bancaire rattachée.`}
+          </p>
+        </div>
+      </div>
+
+      {/* Order Details */}
+      <div className="mt-3.5 p-3.5 rounded-2xl bg-slate-50 border border-slate-100 space-y-2">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <span className="text-[11px] font-semibold text-slate-500 block mb-0.5">Prestation demandée :</span>
+            <span className="font-bold text-slate-900 text-xs sm:text-sm">{action.description}</span>
+          </div>
+          <div className="text-right shrink-0">
+            <span className="text-[10px] uppercase font-bold text-slate-400 block">Total estimé</span>
+            <span className="text-base sm:text-lg font-black text-slate-900 tabular-nums">
+              {action.amount.toFixed(2)} {action.currency || '€'}
+            </span>
+          </div>
+        </div>
+
+        {action.items && action.items.length > 0 && (
+          <div className="pt-2 border-t border-slate-200/80">
+            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">Détails des articles :</span>
+            <ul className="list-disc list-inside space-y-0.5 text-slate-700 text-[11px]">
+              {action.items.map((item, idx) => (
+                <li key={idx}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {action.deliveryAddress && (
+          <div className="flex items-center gap-1.5 text-[11px] text-slate-600 pt-1">
+            <MapPin className="w-3.5 h-3.5 text-slate-400" />
+            <span>Livraison : {action.deliveryAddress}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Card Info & Security */}
+      <div className="mt-3 flex items-center justify-between text-[11px] text-slate-500 px-1">
+        <div className="flex items-center gap-1.5">
+          <CreditCard className="w-3.5 h-3.5 text-slate-500" />
+          <span>Règlement : Carte Visa •••• {action.cardLast4 || '4242'}</span>
+        </div>
+        <div className="flex items-center gap-1 text-emerald-700 font-semibold">
+          <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+          <span>Plafond respecté</span>
+        </div>
+      </div>
+
+      {/* Action Buttons */}
+      <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between flex-wrap gap-2">
+        {status === 'pending_approval' ? (
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <button
+              type="button"
+              onClick={handleConfirm}
+              className="flex-1 sm:flex-initial px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold transition-all shadow-xs cursor-pointer active:scale-95 flex items-center justify-center gap-1.5"
+            >
+              <Check className="w-3.5 h-3.5" />
+              <span>Autoriser le débit & Commander</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleCancel}
+              className="px-3.5 py-2 rounded-xl text-rose-600 hover:bg-rose-50 font-semibold transition-colors cursor-pointer"
+            >
+              Refuser
+            </button>
+          </div>
+        ) : status === 'confirmed' ? (
+          <div className="flex items-center justify-between w-full">
+            <span className="text-[11px] text-emerald-800 font-bold flex items-center gap-1.5">
+              <Check className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Commande transmise au marchand avec succès</span>
+            </span>
+
+            {cancelCountdown !== null && cancelCountdown > 0 ? (
+              <button
+                type="button"
+                onClick={handleCancel}
+                className="px-3 py-1.5 rounded-xl text-rose-700 bg-rose-50 hover:bg-rose-100 font-bold transition-colors cursor-pointer border border-rose-200"
+              >
+                Annuler d'urgence ({cancelCountdown}s)
+              </button>
+            ) : (
+              <span className="text-[10px] text-slate-400">Délai d'annulation expiré</span>
+            )}
+          </div>
+        ) : (
+          <div className="text-[11px] text-rose-700 font-semibold">
+            Cette commande a été annulée. Aucun montant n'a été prélevé.
+          </div>
+        )}
+
+        {onOpenPaymentModal && (
+          <button
+            type="button"
+            onClick={onOpenPaymentModal}
+            className="text-[11px] font-semibold text-slate-500 hover:text-slate-800 transition-colors ml-auto cursor-pointer"
+          >
+            Plafonds & Sécurité
           </button>
         )}
       </div>

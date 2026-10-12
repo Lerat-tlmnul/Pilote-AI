@@ -10,7 +10,8 @@ import {
   Sparkles, 
   TrendingUp, 
   Flag,
-  MessageSquare
+  MessageSquare,
+  Trash2
 } from 'lucide-react';
 import { Project, Milestone } from '../types';
 
@@ -18,64 +19,48 @@ const LOGO_URL = "https://cdn.fbsbx.com/v/t65.102178-21/841369064_17001743183425
 
 interface ProjectsViewProps {
   onOpenChatWithPrompt: (prompt: string) => void;
+  onBackToChat?: () => void;
 }
 
-const INITIAL_PROJECTS: Project[] = [
-  {
-    id: 'proj-1',
-    title: 'Lancement Commercial Europe 2026',
-    category: 'Stratégie & Croissance',
-    description: 'Déploiement de la nouvelle offre haut de gamme sur 4 marchés clés : France, Suisse, Belgique et Luxembourg.',
-    progress: 65,
-    status: 'en_cours',
-    deadline: '15 Décembre 2026',
-    budget: '120 000 €',
-    team: ['Alexandre (Lead)', 'Sarah (Comms)', 'Marc (Ops)'],
-    milestones: [
-      { id: 'm-1', title: 'Étude d\'impact et localisation des offres', done: true, dueDate: 'Sept 2026' },
-      { id: 'm-2', title: 'Partenariats avec les relais d\'influence', done: true, dueDate: 'Oct 2026' },
-      { id: 'm-3', title: 'Soirée de lancement et relations presse', done: false, dueDate: 'Nov 2026' },
-      { id: 'm-4', title: 'Bilan d\'acquisition premier mois', done: false, dueDate: 'Déc 2026' },
-    ],
-  },
-  {
-    id: 'proj-2',
-    title: 'Ouverture du Lieu Éphémère & Expérience Gastronomique',
-    category: 'Événementiel & Art de Vivre',
-    description: 'Conception d\'une table d\'hôtes confidentielle avec chefs invités et accords mets & vins exclusifs.',
-    progress: 40,
-    status: 'en_cours',
-    deadline: '28 Novembre 2026',
-    budget: '45 000 €',
-    team: ['Chef invité', 'Clara (Scéno)', 'Équipe Sommelier'],
-    milestones: [
-      { id: 'm-21', title: 'Sélection et privatisation de l\'espace patrimonial', done: true, dueDate: 'Octobre 2026' },
-      { id: 'm-22', title: 'Validation du menu 7 temps et des accords', done: true, dueDate: 'Octobre 2026' },
-      { id: 'm-23', title: 'Envoi des invitations VIP aux 50 convives', done: false, dueDate: 'Début Nov 2026' },
-      { id: 'm-24', title: 'Service et captation éditoriale', done: false, dueDate: '28 Nov 2026' },
-    ],
-  },
-  {
-    id: 'proj-3',
-    title: 'Refonte de l\'Identité Visuelle & Studio Web',
-    category: 'Direction Artistique',
-    description: 'Modernisation intégrale des supports, typographies et plateformes numériques vers une esthétique minimaliste.',
-    progress: 90,
-    status: 'en_cours',
-    deadline: '25 Octobre 2026',
-    budget: '32 000 €',
-    team: ['Studio Pilote', 'Directeur Artistique'],
-    milestones: [
-      { id: 'm-31', title: 'Définition du manifeste de marque & charte', done: true, dueDate: 'Août 2026' },
-      { id: 'm-32', title: 'Maquettes interactives et design system', done: true, dueDate: 'Sept 2026' },
-      { id: 'm-33', title: 'Recette technique et animations de transition', done: true, dueDate: 'Oct 2026' },
-      { id: 'm-34', title: 'Mise en ligne finale et annonces', done: false, dueDate: '25 Oct 2026' },
-    ],
-  },
-];
+const isBaseProject = (p: Project) => {
+  const lower = (p.title || '').toLowerCase();
+  return (
+    p.id.startsWith('p1') ||
+    p.id.startsWith('p2') ||
+    p.id.startsWith('p3') ||
+    p.id === '1' ||
+    p.id === '2' ||
+    p.id === '3' ||
+    lower.includes('refonte crm') ||
+    lower.includes('lancement pilote') ||
+    lower.includes('expansion internationale')
+  );
+};
 
-export const ProjectsView: React.FC<ProjectsViewProps> = ({ onOpenChatWithPrompt }) => {
-  const [projects, setProjects] = useState<Project[]>(INITIAL_PROJECTS);
+export const ProjectsView: React.FC<ProjectsViewProps> = ({ onOpenChatWithPrompt, onBackToChat }) => {
+  const [projects, setProjects] = useState<Project[]>(() => {
+    try {
+      // Purge legacy base projects
+      const purgeKey = 'pilote_purged_defaults_v4';
+      if (localStorage.getItem(purgeKey) !== 'true') {
+        localStorage.setItem(purgeKey, 'true');
+        localStorage.removeItem('pilote_user_projects');
+        return [];
+      }
+      const saved = localStorage.getItem('pilote_user_projects');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          const clean = parsed.filter((p: Project) => !isBaseProject(p));
+          localStorage.setItem('pilote_user_projects', JSON.stringify(clean));
+          return clean;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return [];
+  });
   const [filter, setFilter] = useState<'all' | 'en_cours' | 'termine'>('all');
   const [isNewModalOpen, setIsNewModalOpen] = useState(false);
   const [newTitle, setNewTitle] = useState('');
@@ -83,8 +68,22 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({ onOpenChatWithPrompt
   const [newDesc, setNewDesc] = useState('');
   const [newDeadline, setNewDeadline] = useState('');
 
+  const saveProjects = (updated: Project[]) => {
+    setProjects(updated);
+    try {
+      localStorage.setItem('pilote_user_projects', JSON.stringify(updated));
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleDeleteProject = (projectId: string) => {
+    const updated = projects.filter(p => p.id !== projectId);
+    saveProjects(updated);
+  };
+
   const toggleMilestone = (projectId: string, milestoneId: string) => {
-    setProjects(prev => prev.map(p => {
+    const updated = projects.map(p => {
       if (p.id !== projectId) return p;
       const updatedMilestones = p.milestones.map(m => 
         m.id === milestoneId ? { ...m, done: !m.done } : m
@@ -95,9 +94,10 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({ onOpenChatWithPrompt
         ...p,
         milestones: updatedMilestones,
         progress: newProgress,
-        status: newProgress === 100 ? 'termine' : 'en_cours',
+        status: (newProgress === 100 ? 'termine' : 'en_cours') as Project['status'],
       };
-    }));
+    });
+    saveProjects(updated);
   };
 
   const handleCreateProject = (e: React.FormEvent) => {
@@ -120,7 +120,7 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({ onOpenChatWithPrompt
       ],
     };
 
-    setProjects([newProj, ...projects]);
+    saveProjects([newProj, ...projects]);
     setNewTitle('');
     setNewCategory('');
     setNewDesc('');
@@ -134,7 +134,17 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({ onOpenChatWithPrompt
   });
 
   return (
-    <div className="w-full max-w-5xl mx-auto px-4 pt-20 md:pt-24 pb-28 md:pb-16 animate-in fade-in duration-300">
+    <div className="w-full max-w-5xl mx-auto px-4 pt-16 md:pt-24 pb-28 md:pb-16 animate-in fade-in duration-300">
+      {onBackToChat && (
+        <button
+          type="button"
+          onClick={onBackToChat}
+          className="md:hidden inline-flex items-center gap-1.5 text-xs font-semibold text-slate-700 bg-white border border-black/[0.08] px-3.5 py-1.5 rounded-full mb-4 shadow-2xs active:scale-95 transition-all cursor-pointer"
+        >
+          <span>← Revenir au Chat Pilote</span>
+        </button>
+      )}
+
       {/* Top Banner of Projects View */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
         <div>
@@ -219,9 +229,30 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({ onOpenChatWithPrompt
         </button>
       </div>
 
-      {/* Project Cards Grid */}
-      <div className="grid grid-cols-1 gap-6">
-        {filteredProjects.map((project) => (
+      {/* Project Cards Grid or Empty State */}
+      {filteredProjects.length === 0 ? (
+        <div className="rounded-3xl bg-white/80 backdrop-blur-2xl border border-white/80 p-8 sm:p-12 text-center shadow-sm max-w-lg mx-auto my-6">
+          <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center mx-auto mb-3 text-slate-600">
+            <FolderKanban className="w-6 h-6" />
+          </div>
+          <h3 className="text-base font-bold text-slate-900">
+            {filter === 'all' ? 'Aucun projet enregistré' : `Aucun projet « ${filter === 'en_cours' ? 'En cours' : 'Terminé'} »`}
+          </h3>
+          <p className="text-xs text-slate-500 mt-1 max-w-xs mx-auto leading-relaxed">
+            Créez votre premier grand projet avec le bouton « + Nouveau Projet » ou confiez la planification à Pilote 1.
+          </p>
+          <button
+            type="button"
+            onClick={() => setIsNewModalOpen(true)}
+            className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-xs active:scale-95 transition-all cursor-pointer"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Créer un projet</span>
+          </button>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-6">
+          {filteredProjects.map((project) => (
           <div
             key={project.id}
             className="rounded-3xl bg-white/90 border border-white/80 p-5 md:p-6 shadow-md backdrop-blur-xl transition-all hover:shadow-lg"
@@ -317,18 +348,31 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({ onOpenChatWithPrompt
                 <span>Équipe : {project.team.join(', ')}</span>
               </div>
 
-              <button
-                type="button"
-                onClick={() => onOpenChatWithPrompt(`Faisons un point sur le projet "${project.title}". Quels sont les prochains obstacles et recommandations pour tenir l'échéance du ${project.deadline} ?`)}
-                className="flex items-center gap-1.5 text-xs font-semibold text-slate-900 hover:text-sky-700 transition-colors cursor-pointer"
-              >
-                <span>Demander une analyse détaillée</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleDeleteProject(project.id)}
+                  className="flex items-center gap-1 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer text-xs font-medium py-1 px-2.5 rounded-lg hover:bg-rose-50/80"
+                  title="Supprimer ce projet"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Supprimer</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => onOpenChatWithPrompt(`Faisons un point sur le projet "${project.title}". Quels sont les prochains obstacles et recommandations pour tenir l'échéance du ${project.deadline} ?`)}
+                  className="flex items-center gap-1.5 text-xs font-semibold text-slate-900 hover:text-sky-700 transition-colors cursor-pointer"
+                >
+                  <span>Demander une analyse</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
           </div>
         ))}
       </div>
+    )}
 
       {/* New Project Modal */}
       {isNewModalOpen && (

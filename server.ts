@@ -138,7 +138,6 @@ app.post('/api/chat', async (req, res) => {
     // Detect user requested city
     const detectedCity = detectCityInText(lastUserMsgRaw);
     const activeCityName = detectedCity ? detectedCity.name : (userLocation?.city || 'Paris');
-
     let contextualSystemPrompt = `Tu es ${publicName}, un assistant personnel d'élite doté d'une interface ultra-élégante avec un design Apple minimaliste et fluide.
 Tu as accès à l'ensemble de Google Workspace (Gmail, Google Calendar, Google Tasks, Google Drive), à la géolocalisation et à l'API Google Maps officielle.
 Tu exécutes directement les requêtes de l'utilisateur : TU DIS DE FAIRE ET IL FAIT. Ne pose pas de questions inutiles, rédige et exécute immédiatement.
@@ -146,22 +145,18 @@ Tu exécutes directement les requêtes de l'utilisateur : TU DIS DE FAIRE ET IL 
 RÈGLE ABSOLUE ET STRICTE D'IDENTITÉ :
 Tu es UNIQUEMENT et TOUJOURS "${publicName}". Si jamais on te demande quel modèle tu es ou qui tu es, réponds toujours fermement : "Je suis ${publicName}". Tu ne dois JAMAIS citer ni divulguer le nom d'un modèle d'IA sous-jacent.
 
-${thinkingEnabled ? `RÈGLE DE RÉFLEXION ACTIVÉE :
-L'utilisateur a activé le mode "Réflexion". Avant de rédiger ta réponse finale et tes actions, décris brièvement tes étapes d'analyse logique dans un bloc :
-<thinking>
-- Analyse du besoin...
-- Planification des actions Google Workspace ou Restaurants...
-- Vérification de cohérence...
-</thinking>
-Puis donne ta réponse finale claire et directe.` : ''}
+RÈGLE DE RAISONNEMENT DÉTAILLÉ (THINKING) :
+Pendant que tu réfléchis ou lorsque tu effectues une action concrète (par exemple rédiger un email, créer une fiche de révision, planifier une réunion ou préparer une commande), écris TOUJOURS dans un bloc <thinking>...</thinking> les étapes précises de ce que tu es en train de faire (ex: analyse du destinataire, choix du ton, rédaction des arguments, validation des contraintes).
 
 FORMATS STRUCTURÉS D'ACTION :
 1. Restaurants (avec carte interactive en direct) : bloc \`\`\`json:restaurants ... \`\`\`
-2. Envoi d'e-mail via Gmail : bloc \`\`\`json:email_action ... \`\`\`
+2. Envoi d'e-mail via Gmail : bloc \`\`\`json:email_action ... \`\`\` (respecte scrupuleusement l'adresse e-mail et le message fournis)
 3. Rendez-vous Google Calendar : bloc \`\`\`json:appointment_action ... \`\`\`
 4. Google Tasks : bloc \`\`\`json:task_action ... \`\`\`
 5. Google Drive : bloc \`\`\`json:drive_action ... \`\`\`
-6. Tâches quotidiennes et récurrentes : bloc \`\`\`json:scheduled_task_action ... \`\`\``;
+6. Tâches quotidiennes et récurrentes : bloc \`\`\`json:scheduled_task_action ... \`\`\`
+7. Commandes et Débits Bancaires : bloc \`\`\`json:order_action ... \`\`\` avec avertissement de sécurité
+8. Fiche de révision Mode Étudiant : bloc \`\`\`json:revision_action ... \`\`\``;
 
     if (userLocation || detectedCity) {
       contextualSystemPrompt += `\n\n[Information de localisation active] : Ville ciblée : ${activeCityName}.`;
@@ -335,6 +330,25 @@ FORMATS STRUCTURÉS D'ACTION :
             // ignore
           }
         }
+      }
+    }
+
+    if (!extractedThinking) {
+      if (isEmailIntent) {
+        extractedThinking = `1. Destinataire vérifié : ${finalRecipient}
+2. Détermination du sujet : "${finalSubject}"
+3. Rédaction du message avec formule adaptée et claire
+4. Contrôle de sécurité et validation d'envoi Workspace`;
+      } else if (lastUserMsgLower.includes('fiche') || lastUserMsgLower.includes('révision') || lastUserMsgLower.includes('cours')) {
+        extractedThinking = `1. Analyse du sujet académique et identification des notions clés
+2. Structuration pédagogique en blocs modulaires (Markdown, Code, Notes)
+3. Génération des flashcards d'apprentissage actif
+4. Enregistrement direct dans le Mode Étudiant`;
+      } else if (lastUserMsgLower.includes('command') || lastUserMsgLower.includes('achète') || lastUserMsgLower.includes('payer')) {
+        extractedThinking = `1. Identification du service marchand et estimation du montant
+2. Contrôle des plafonds de la carte bancaire
+3. Génération de l'avertissement de sécurité de débit réel
+4. Mise en attente de validation par l'utilisateur`;
       }
     }
 

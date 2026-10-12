@@ -91,12 +91,38 @@ export interface ScheduledTaskAction {
 
 export type PiloteModelId = 'flash' | 'mini' | 'large';
 
+export interface AutonomousOrderAction {
+  id?: string;
+  service: string;
+  category: 'repas' | 'transport' | 'achat' | 'courses';
+  description: string;
+  items?: string[];
+  amount: number;
+  currency: string;
+  status: 'pending_approval' | 'confirmed' | 'cancelled';
+  cardLast4?: string;
+  deliveryAddress?: string;
+  estimatedDelivery?: string;
+  warningMessage?: string;
+  autoExecuted?: boolean;
+}
+
+export interface StudentRevisionAction {
+  id?: string;
+  title: string;
+  subject: string;
+  summary: string;
+  blocksCount: number;
+  sheetId?: string;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
   thinking?: string;
+  userNotes?: string; // Notes/thought added by the user to the reasoning process
   modelUsed?: string;
   attachments?: Attachment[];
   restaurants?: Restaurant[];
@@ -105,6 +131,8 @@ export interface Message {
   taskAction?: GoogleTaskAction;
   driveAction?: GoogleDriveAction;
   scheduledTaskAction?: ScheduledTaskAction;
+  orderAction?: AutonomousOrderAction;
+  revisionAction?: StudentRevisionAction;
 }
 
 export interface Milestone {
@@ -158,6 +186,72 @@ export interface MemoryItem {
   createdAt: number;
 }
 
+export interface ConnectedServiceAccount {
+  id: string;
+  name: string;
+  category: 'food' | 'transport' | 'shopping' | 'groceries';
+  logoColor?: string;
+  connected: boolean;
+  accountEmail?: string;
+  lastConnectedAt?: number;
+}
+
+export interface PaymentMethodConfig {
+  isLinked: boolean;
+  cardBrand?: 'visa' | 'mastercard' | 'cb' | 'amex';
+  cardHolder?: string;
+  last4?: string;
+  expiryDate?: string;
+  maxAmountPerOrder: number; // e.g. 50
+  dailyLimit: number; // e.g. 150
+  requireExplicitConfirmation: boolean;
+  allowAutonomousOrdering: boolean;
+  connectedServices: ConnectedServiceAccount[];
+  hasAcceptedWarning: boolean;
+  updatedAt?: number;
+}
+
+export interface FlashcardItem {
+  id: string;
+  question: string;
+  answer: string;
+  hint?: string;
+  mastered?: boolean;
+}
+
+export interface QuizQuestionItem {
+  id: string;
+  question: string;
+  options: string[];
+  correctIndex: number;
+  explanation?: string;
+}
+
+export type RevisionBlockType = 'markdown' | 'code' | 'text' | 'flashcards' | 'quiz';
+
+export interface RevisionBlock {
+  id: string;
+  type: RevisionBlockType;
+  title?: string;
+  content: string; // for markdown, code, and text (freeform notes)
+  language?: string; // for code block: 'python', 'javascript', 'typescript', 'cpp', 'sql', 'html', etc.
+  flashcards?: FlashcardItem[];
+  quiz?: QuizQuestionItem[];
+}
+
+export interface RevisionSheet {
+  id: string;
+  title: string;
+  subject: string; // e.g. "Mathématiques", "Informatique", "Droit", "Médecine", "Histoire", "Langues"
+  description?: string;
+  sourceType: 'text' | 'image' | 'prompt' | 'manual';
+  sourcePreview?: string;
+  tags: string[];
+  blocks: RevisionBlock[];
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface UserProfileData {
   userId: string;
   email?: string | null;
@@ -166,4 +260,7 @@ export interface UserProfileData {
   conversations: Conversation[];
   activeConversationId: string;
   scheduledTasks?: ScheduledTask[];
+  paymentConfig?: PaymentMethodConfig;
+  revisionSheets?: RevisionSheet[];
 }
+

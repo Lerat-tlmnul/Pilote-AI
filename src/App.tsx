@@ -7,6 +7,8 @@ import { ConversationDrawer } from './components/ConversationDrawer';
 import { MemoryModal } from './components/MemoryModal';
 import { ImportantWelcomeModal } from './components/ImportantWelcomeModal';
 import { ScheduledTasksModal } from './components/ScheduledTasksModal';
+import { PaymentDelegationModal } from './components/PaymentDelegationModal';
+import { StudentModeView } from './components/StudentModeView';
 import { 
   Message, 
   Attachment, 
@@ -18,6 +20,7 @@ import {
   GoogleDriveAction,
   ScheduledTaskAction,
   ScheduledTask,
+  AutonomousOrderAction,
   GoogleUser,
   UserProfileData,
   MemoryItem,
@@ -46,6 +49,7 @@ import {
   addScheduledTask,
   recordScheduledTaskExecution
 } from './lib/memoryStorage';
+import { loadPaymentConfig, savePaymentConfig } from './lib/paymentStorage';
 import { sendChatMessage } from './lib/aiService';
 
 const BG_IMAGE_URL = "https://flow-content.google/image/e1cf28f0-1737-42fd-ad3a-f19ee5aacd13?Expires=1791409717&KeyName=labs-flow-prod-cdn-key&Signature=TkQoyce8x-Zk5uIvR-N2774-gEo";
@@ -58,6 +62,7 @@ export default function App() {
   const [isMemoryModalOpen, setIsMemoryModalOpen] = useState(false);
   const [isImportantModalOpen, setIsImportantModalOpen] = useState(false);
   const [isTasksModalOpen, setIsTasksModalOpen] = useState(false);
+  const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
 
   const [googleUser, setGoogleUser] = useState<GoogleUser | null>(null);
   const [isConnectingGoogle, setIsConnectingGoogle] = useState(false);
@@ -67,8 +72,14 @@ export default function App() {
   const [selectedModelId, setSelectedModelId] = useState<PiloteModelId>('flash');
   const [thinkingEnabled, setThinkingEnabled] = useState<boolean>(false);
 
-  // Persistent User Profile State (Conversations + Memory + Scheduled Tasks)
-  const [profile, setProfile] = useState<UserProfileData>(() => loadProfileData('guest'));
+  // Persistent User Profile State (Conversations + Memory + Scheduled Tasks + Payment Config)
+  const [profile, setProfile] = useState<UserProfileData>(() => {
+    const data = loadProfileData('guest');
+    return {
+      ...data,
+      paymentConfig: data.paymentConfig || loadPaymentConfig(),
+    };
+  });
 
   // Show important welcome modal on first app load
   useEffect(() => {
@@ -339,7 +350,7 @@ export default function App() {
         content: aiResult.cleanText || "Je reste à votre entière disposition.",
         timestamp: Date.now(),
         thinking: aiResult.thinking,
-        modelUsed: aiResult.modelUsed || (selectedModelId === 'large' ? 'Pilote 1 Large' : selectedModelId === 'mini' ? 'Pilote 1 Mini' : 'Pilote 1 Flash'),
+        modelUsed: aiResult.modelUsed || (selectedModelId === 'large' ? 'Pilote 1 Large' : 'Pilote 1 Flash'),
         restaurants: aiResult.restaurants,
         emailAction: aiResult.emailAction,
         appointmentAction: aiResult.appointmentAction,
@@ -411,15 +422,16 @@ export default function App() {
   };
 
   return (
-    <div
-      className="relative w-full h-[100dvh] flex flex-col overflow-hidden bg-cover bg-center select-none"
-      style={{
-        backgroundImage: `url(${BG_IMAGE_URL})`,
-        backgroundColor: '#9bc2e5',
-      }}
-    >
-      {/* Subtle Atmospheric Gradient Overlay */}
-      <div className="absolute inset-0 bg-linear-to-b from-white/10 via-transparent to-black/10 pointer-events-none" />
+    <div className="relative w-full h-[100dvh] flex flex-col overflow-hidden select-none">
+      {/* Full Background Image Layer (Mobile & Desktop) */}
+      <div 
+        className="absolute inset-0 bg-cover bg-center pointer-events-none"
+        style={{
+          backgroundImage: `url(${BG_IMAGE_URL})`,
+          backgroundColor: '#9bc2e5',
+        }}
+      />
+      <div className="absolute inset-0 bg-linear-to-b from-white/15 via-transparent to-black/10 pointer-events-none" />
 
       {/* Header and Mobile Dock */}
       <HeaderNav
@@ -438,6 +450,8 @@ export default function App() {
         onOpenMemoryModal={() => setIsMemoryModalOpen(true)}
         onOpenImportantModal={() => setIsImportantModalOpen(true)}
         onOpenTasksModal={() => setIsTasksModalOpen(true)}
+        onOpenPaymentModal={() => setIsPaymentModalOpen(true)}
+        isPaymentLinked={!!profile.paymentConfig?.isLinked}
         scheduledTasksCount={profile.scheduledTasks?.length || 0}
         selectedModelId={selectedModelId}
         onSelectModelId={(model) => setSelectedModelId(model)}
@@ -453,6 +467,43 @@ export default function App() {
             userLocation={userLocation}
             onRequestLocation={requestLocation}
             onOpenTasksModal={() => setIsTasksModalOpen(true)}
+            onOpenPaymentModal={() => setIsPaymentModalOpen(true)}
+            onConfirmOrderAction={(action) => {
+              const confirmationMsg: Message = {
+                id: `msg-${Date.now()}-order-confirm`,
+                role: 'assistant',
+                content: `✅ Votre commande auprès de **${action.service}** a bien été validée. Un débit réel de **${action.amount.toFixed(2)} €** a été autorisé sur votre carte bancaire (Visa •••• ${action.cardLast4 || '4242'}).`,
+                timestamp: Date.now(),
+              };
+              setProfile((prev) => {
+                const updatedConversations = prev.conversations.map((c) =>
+                  c.id === activeConversation.id
+                    ? { ...c, messages: [...c.messages, confirmationMsg], updatedAt: Date.now() }
+                    : c
+                );
+                const updated = { ...prev, conversations: updatedConversations };
+                saveProfileData(updated);
+                return updated;
+              });
+            }}
+            onCancelOrderAction={(action) => {
+              const cancelMsg: Message = {
+                id: `msg-${Date.now()}-order-cancel`,
+                role: 'assistant',
+                content: `🛑 La commande auprès de **${action.service}** a été annulée. Aucun débit n'a été prélevé sur votre carte.`,
+                timestamp: Date.now(),
+              };
+              setProfile((prev) => {
+                const updatedConversations = prev.conversations.map((c) =>
+                  c.id === activeConversation.id
+                    ? { ...c, messages: [...c.messages, cancelMsg], updatedAt: Date.now() }
+                    : c
+                );
+                const updated = { ...prev, conversations: updatedConversations };
+                saveProfileData(updated);
+                return updated;
+              });
+            }}
             thinkingEnabled={thinkingEnabled}
             onToggleThinking={() => setThinkingEnabled((prev) => !prev)}
             selectedModelId={selectedModelId}
@@ -495,7 +546,10 @@ export default function App() {
           />
         ) : (
           <div className="flex-1 overflow-y-auto no-scrollbar">
-            <ProjectsView onOpenChatWithPrompt={handleOpenChatWithPrompt} />
+            <ProjectsView 
+              onOpenChatWithPrompt={handleOpenChatWithPrompt} 
+              onBackToChat={() => setCurrentTab('chat')} 
+            />
           </div>
         )}
       </main>
@@ -547,6 +601,21 @@ export default function App() {
         profile={profile}
         onAddMemory={handleAddMemory}
         onRemoveMemory={handleRemoveMemory}
+      />
+
+      {/* Payment & Autonomous Ordering Delegation Modal */}
+      <PaymentDelegationModal
+        isOpen={isPaymentModalOpen}
+        onClose={() => setIsPaymentModalOpen(false)}
+        config={profile.paymentConfig || loadPaymentConfig()}
+        onSaveConfig={(updatedConfig) => {
+          savePaymentConfig(updatedConfig);
+          setProfile((prev) => {
+            const updated = { ...prev, paymentConfig: updatedConfig };
+            saveProfileData(updated);
+            return updated;
+          });
+        }}
       />
     </div>
   );

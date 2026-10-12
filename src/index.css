@@ -9,7 +9,16 @@
   body {
     font-family: var(--font-sans);
     min-height: 100dvh;
+    -webkit-tap-highlight-color: transparent;
   }
+}
+
+@utility pt-safe {
+  padding-top: max(0.5rem, env(safe-area-inset-top, 0px));
+}
+
+@utility pb-safe {
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom, 0px));
 }
 
 /* Custom smooth glass and glowing animations */
